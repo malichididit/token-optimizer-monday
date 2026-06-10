@@ -9466,8 +9466,7 @@ def _classify_surface(jsonl_path):
         return "claude-code"
     path_str = str(jsonl_path)
     if path_str.startswith("duckdb:"):
-        # DuckDB sessions: slug tells us if chat or agent
-        return "desktop-agent"
+        return "claude-code"
     if path_str.startswith("hermes:"):
         return "hermes"
     if "local-agent-mode-sessions" in path_str:
@@ -9486,8 +9485,8 @@ def _surface_breakdown_from_db(conn, cutoff):
     breakdown = {}
     for r in rows:
         surface = _classify_surface(r["jsonl_path"])
-        # Refine duckdb rows: check slug for chat vs agent
-        if surface == "desktop-agent":
+        # Refine duckdb-sourced rows: check slug for chat vs code
+        if surface == "claude-code":
             slug = r["slug"] or ""
             if slug.startswith("chat:"):
                 surface = "chat"
