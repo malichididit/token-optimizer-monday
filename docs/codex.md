@@ -185,4 +185,4 @@ Same as the parent project: [PolyForm Noncommercial 1.0.0](../LICENSE).
 
 ---
 
-Created by [Alex Greenshpun](https://github.com/malichididit).
+Fork maintained by monday.com. Upstream: [Token Optimizer](https://github.com/alexgreensh/token-optimizer).

@@ -333,7 +333,7 @@ tr:hover td { background: var(--bg-hover); }
   </div>
 
   <footer class="oc-footer">
-    <span class="byline">Built by <a href="https://github.com/malichididit" target="_blank" rel="noopener">malichididit</a></span>
+    <span class="byline">Built by <a href="https://github.com/malichididit/token-optimizer-monday" target="_blank" rel="noopener">monday.com</a></span>
     <a class="gh-star" href="https://github.com/malichididit/token-optimizer-monday" target="_blank" rel="noopener" title="Star Token Optimizer on GitHub">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l2.9 6.06 6.6.59-5 4.38 1.5 6.47L12 16.98 5.99 20.5l1.5-6.47-5-4.38 6.6-.59L12 2.5z"/></svg>
       <span>Star on GitHub</span>

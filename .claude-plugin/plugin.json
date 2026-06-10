@@ -1,13 +1,18 @@
 {
   "name": "token-optimizer",
-  "description": "Audit, fix, and monitor Claude Code context window usage. Find the ghost tokens.",
+  "description": "Audit, fix, and monitor agent context window usage for monday.com engineering.",
   "author": {
-    "name": "malichididit",
-    "url": "https://github.com/malichididit"
+    "name": "monday.com",
+    "url": "https://github.com/malichididit/token-optimizer-monday"
   },
   "homepage": "https://github.com/malichididit/token-optimizer-monday",
   "repository": "https://github.com/malichididit/token-optimizer-monday",
-  "version": "5.10.4",
+  "version": "1.0.0-monday",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "keywords": ["token", "optimization", "context", "audit", "cost", "coach"]
+  "keywords": [
+    "token",
+    "optimization",
+    "context",
+    "monday"
+  ]
 }

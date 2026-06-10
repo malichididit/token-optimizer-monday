@@ -57,7 +57,7 @@ Usage:
 
 Snapshots are saved to SNAPSHOT_DIR under the active runtime home.
 
-Copyright (C) 2026 Alex Greenshpun
+monday.com fork. Upstream Copyright (C) 2026 Alex Greenshpun — see LICENSE and ATTRIBUTION.md
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """
 from __future__ import annotations
@@ -22867,7 +22867,7 @@ def run_ensure_health():
             print("  [Token Optimizer] First-run tip: enable auto-update for this marketplace")
             print("  so you get bug fixes automatically. In Claude Code:")
             print("")
-            print("      /plugin  ->  Marketplaces  ->  malichididit-token-optimizer")
+            print("      /plugin  ->  Marketplaces  ->  monday-token-optimizer")
             print("               ->  Enable auto-update")
             print("")
             print("  Third-party marketplaces ship with auto-update off by default in")

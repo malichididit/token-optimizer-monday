@@ -1,7 +1,7 @@
 {
-  "name": "malichididit-token-optimizer",
+  "name": "monday-token-optimizer",
   "interface": {
-    "displayName": "Token Optimizer"
+    "displayName": "Token Optimizer (monday.com)"
   },
   "plugins": [
     {

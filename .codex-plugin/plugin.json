@@ -7,7 +7,7 @@
     "displayName": "Token Optimizer",
     "shortDescription": "Find the ghost tokens in Codex sessions.",
     "longDescription": "Token Optimizer for Codex focuses on measurable waste, continuity recovery, and explicit helper tools that fit the current Codex hook surface honestly.",
-    "developerName": "malichididit",
+    "developerName": "monday.com",
     "category": "Developer Tools",
     "capabilities": [
       "Session continuity",

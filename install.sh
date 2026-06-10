@@ -13,7 +13,7 @@
 #
 # Idempotent: safe to run multiple times.
 #
-# Copyright (C) 2026 Alex Greenshpun
+# monday.com fork — upstream Copyright (C) 2026 Alex Greenshpun (see LICENSE)
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 set -euo pipefail
@@ -226,7 +226,7 @@ if [ -d "${HOME}/.claude/plugins/cache" ]; then
         warn "Token Optimizer is already installed as a Claude Code plugin."
         warn "The script installer creates a skill symlink, which would duplicate the plugin."
         warn "If you want the script version instead, first uninstall the plugin:"
-        warn "  /plugin uninstall token-optimizer@malichididit-token-optimizer"
+        warn "  /plugin uninstall token-optimizer@monday-token-optimizer"
         echo ""
         if [ -t 0 ] || [ -e /dev/tty ]; then
             printf "Continue anyway? (y/N) "
