@@ -1,0 +1,28 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "malichididit-token-optimizer",
+  "owner": {
+    "name": "malichididit",
+    "email": "amitmali@monday.com"
+  },
+  "metadata": {
+    "description": "Token optimization tools for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "token-optimizer",
+      "source": "./",
+      "description": "Audit, fix, and monitor Claude Code context window usage. Find the ghost tokens.",
+      "version": "5.10.4",
+      "author": {
+        "name": "malichididit",
+        "url": "https://github.com/malichididit"
+      },
+      "homepage": "https://github.com/malichididit/token-optimizer-monday",
+      "repository": "https://github.com/malichididit/token-optimizer-monday",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "keywords": ["token", "optimization", "context", "audit", "cost", "coach"],
+      "category": "productivity"
+    }
+  ]
+}

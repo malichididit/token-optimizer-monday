@@ -1,0 +1,61 @@
+{
+  "name": "token-optimizer-statusline",
+  "displayName": "Token Optimizer",
+  "description": "See your Claude Code context health, efficiency, and usage limits in the VS Code status bar.",
+  "version": "0.1.11",
+  "publisher": "malichididit",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/malichididit/token-optimizer-monday.git",
+    "directory": "vscode-extension"
+  },
+  "homepage": "https://github.com/malichididit/token-optimizer-monday",
+  "categories": ["Other", "Visualization"],
+  "keywords": ["claude", "claude-code", "token", "context", "status bar"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "tokenOptimizer.showStatus",
+        "title": "Token Optimizer: Show Status Panel"
+      },
+      {
+        "command": "tokenOptimizer.openDashboard",
+        "title": "Token Optimizer: Open Dashboard"
+      },
+      {
+        "command": "tokenOptimizer.refresh",
+        "title": "Token Optimizer: Refresh Now"
+      }
+    ],
+    "configuration": {
+      "title": "Token Optimizer",
+      "properties": {
+        "tokenOptimizer.staleAfterSeconds": {
+          "type": "number",
+          "default": 180,
+          "markdownDescription": "How many seconds before verified statusline usage-limit data is shown as cached. Cached values show their update age; manual refresh also tries a local transcript estimate."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
