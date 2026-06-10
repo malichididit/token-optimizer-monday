@@ -3022,6 +3022,47 @@ var DB = (function() {
       '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">' + cacheLabel + '</div>' + cacheExtra + '</div>' +
       '</div>';
 
+    // Surface breakdown (Cowork, Chat, Code, Hermes)
+    var surfaceBreakdown = t.surface_breakdown || {};
+    var surfaceKeys = Object.keys(surfaceBreakdown);
+    if (surfaceKeys.length > 1) {
+      var surfaceLabels = {
+        "claude-code": "Claude Code",
+        "cowork": "Cowork",
+        "chat": "Chat",
+        "desktop-agent": "Desktop Agent",
+        "hermes": "Hermes"
+      };
+      var surfaceColors = {
+        "claude-code": "#22d3ee",
+        "cowork": "#a78bfa",
+        "chat": "#34d399",
+        "desktop-agent": "#f59e0b",
+        "hermes": "#f472b6"
+      };
+      var surfaceTotalSessions = 0;
+      surfaceKeys.forEach(function(k) { surfaceTotalSessions += surfaceBreakdown[k].sessions; });
+
+      html += '<div class="card wide" style="margin-top:var(--s-3)"><div class="card-header"><span>Spend by Surface (' + t.period_days + 'd)</span><span class="label">Where your tokens go</span></div>';
+      html += '<div class="model-bar" style="margin-bottom:var(--s-2)">';
+      surfaceKeys.sort(function(a,b) { return (surfaceBreakdown[b].input_tokens || 0) - (surfaceBreakdown[a].input_tokens || 0); });
+      surfaceKeys.forEach(function(k) {
+        var s = surfaceBreakdown[k];
+        var pct = surfaceTotalSessions > 0 ? (s.sessions / surfaceTotalSessions * 100).toFixed(1) : '0';
+        var color = surfaceColors[k] || '#888';
+        html += '<div class="model-segment" style="width:' + pct + '%;background:' + color + '" title="' + (surfaceLabels[k] || k) + ': ' + pct + '% (' + s.sessions + ' sessions)"></div>';
+      });
+      html += '</div>';
+      html += '<table style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr style="border-bottom:1px solid var(--c-border);"><th style="text-align:left;padding:6px 8px">Surface</th><th style="text-align:right;padding:6px 8px">Sessions</th><th style="text-align:right;padding:6px 8px">Input Tokens</th><th style="text-align:right;padding:6px 8px">Output Tokens</th></tr></thead><tbody>';
+      surfaceKeys.forEach(function(k) {
+        var s = surfaceBreakdown[k];
+        var label = surfaceLabels[k] || k;
+        var color = surfaceColors[k] || '#888';
+        html += '<tr style="border-bottom:1px solid var(--c-border)"><td style="padding:6px 8px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + color + ';margin-right:6px;vertical-align:middle"></span>' + esc(label) + '</td><td style="text-align:right;padding:6px 8px">' + s.sessions + '</td><td style="text-align:right;padding:6px 8px">' + fn(s.input_tokens || 0) + '</td><td style="text-align:right;padding:6px 8px">' + fn(s.output_tokens || 0) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
     // Shared data for skills sections
     var skillsDetail = (data.snapshot && data.snapshot.components && data.snapshot.components.skills_detail) || {};
 

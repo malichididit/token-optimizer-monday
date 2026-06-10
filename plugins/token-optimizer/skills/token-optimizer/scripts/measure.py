@@ -97,6 +97,8 @@ import codex_io
 import codex_session
 import codex_state
 import hermes_session
+import cowork_session
+import duckdb_bridge
 
 try:
     import fcntl
@@ -189,6 +191,11 @@ def _use_codex_session_adapter(filepath=None):
 def _use_hermes_session_adapter():
     """True when sessions should be loaded from the Hermes state.db adapter."""
     return detect_runtime() == "hermes"
+
+
+def _use_cowork_session_adapter(filepath=None):
+    """True when session JSONL should be parsed with the Cowork adapter."""
+    return filepath is not None and cowork_session.is_cowork_audit_path(filepath)
 
 # Tokens per skill frontmatter (loaded at startup)
 TOKENS_PER_SKILL_APPROX = 100
@@ -6825,6 +6832,13 @@ def _find_all_jsonl_files(days=30):
             except OSError:
                 continue
     results.sort(key=lambda x: x[1], reverse=True)
+
+    # Also scan Cowork (Claude Desktop agent-mode) sessions
+    cowork_files = cowork_session.find_all_audit_files(days)
+    if cowork_files:
+        results.extend(cowork_files)
+        results.sort(key=lambda x: x[1], reverse=True)
+
     return results
 
 
@@ -7112,6 +7126,9 @@ def _parse_session_jsonl(filepath):
     """
     if _use_codex_session_adapter(filepath):
         return codex_session.parse_session_jsonl(filepath)
+
+    if _use_cowork_session_adapter(filepath):
+        return cowork_session.parse_audit_jsonl(filepath)
 
     skills_used = {}
     subagents_used = {}
@@ -8767,6 +8784,109 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
     return new_count
 
 
+def _collect_duckdb_sessions(days=90, quiet=False, rebuild=False):
+    """Import sessions from analytics.duckdb into the trends DB.
+
+    Sources rows from duckdb_bridge.recent_sessions() + normalize_session().
+    Uses 'duckdb:{session_id}' as the dedup key. Skips sessions already
+    collected from JSONL to avoid double-counting Code sessions.
+    """
+    if not duckdb_bridge.is_available():
+        return 0
+
+    conn = _init_trends_db()
+    new_count = 0
+    try:
+        rows = duckdb_bridge.recent_sessions(days=days)
+        if not rows:
+            return 0
+
+        for row in rows:
+            parsed = duckdb_bridge.normalize_session(row)
+            if not parsed:
+                continue
+
+            session_id = parsed.get("session_id", "")
+            dedup_key = f"duckdb:{session_id}"
+
+            if _is_file_collected(conn, dedup_key):
+                continue
+
+            # Avoid double-counting: check if this session was already
+            # collected from JSONL (Code sessions exist in both sources)
+            existing = conn.execute(
+                "SELECT 1 FROM session_log WHERE slug = ? OR slug = ? LIMIT 1",
+                (session_id, f"agent:{session_id}"),
+            ).fetchone()
+            if existing:
+                continue
+
+            first_ts = parsed.get("first_ts", "")
+            try:
+                if first_ts:
+                    ts_clean = first_ts.rstrip("Z")
+                    if "+" not in ts_clean[10:]:
+                        ts_clean += "+00:00"
+                    from datetime import datetime as _dt
+                    date = _dt.fromisoformat(ts_clean).strftime("%Y-%m-%d")
+                else:
+                    date = datetime.now().strftime("%Y-%m-%d")
+            except (TypeError, ValueError, OSError):
+                date = datetime.now().strftime("%Y-%m-%d")
+
+            project_name = parsed.get("topic") or "duckdb"
+
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO session_log
+                   (jsonl_path, date, project, duration_minutes, input_tokens,
+                    output_tokens, message_count, api_calls, cache_hit_rate,
+                    cache_create_1h_tokens, cache_create_5m_tokens, cache_ttl_scanned,
+                    avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds,
+                    skills_json, subagents_json, tool_calls_json, model_usage_json,
+                    all_model_usage_json, model_usage_breakdown_json, version, slug, topic, collected_at,
+                    quality_score, quality_grade, stale_waste_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    dedup_key, date, project_name,
+                    parsed["duration_minutes"],
+                    parsed["total_input_tokens"],
+                    parsed["total_output_tokens"],
+                    parsed["message_count"],
+                    parsed.get("api_calls", 0),
+                    parsed["cache_hit_rate"],
+                    parsed.get("total_cache_create_1h", 0),
+                    parsed.get("total_cache_create_5m", 0),
+                    1,
+                    parsed.get("avg_call_gap_seconds"),
+                    parsed.get("max_call_gap_seconds"),
+                    parsed.get("p95_call_gap_seconds"),
+                    json.dumps(parsed.get("skills_used", {})),
+                    json.dumps(parsed.get("subagents_used", {})),
+                    json.dumps(parsed.get("tool_calls", {})),
+                    json.dumps(parsed.get("model_usage", {})),
+                    json.dumps(parsed.get("model_usage", {})),
+                    json.dumps(parsed.get("model_usage_breakdown", {})),
+                    parsed.get("version"),
+                    parsed.get("slug"),
+                    parsed.get("topic"),
+                    datetime.now().isoformat(),
+                    0,
+                    "N/A",
+                    0,
+                ),
+            )
+            if cur.rowcount == 1:
+                new_count += 1
+
+        if new_count > 0:
+            _rebuild_aggregate_tables(conn)
+            conn.commit()
+    finally:
+        conn.close()
+
+    return new_count
+
+
 def collect_sessions(days=90, quiet=False, rebuild=False):
     """Parse new JSONL files and insert into SQLite. Zero token cost.
 
@@ -8924,10 +9044,15 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
     conn.commit()  # PRAGMA write must be committed explicitly (Lang Reviewer H2)
     conn.close()
 
+    # Also collect from analytics.duckdb (Chat + any sessions missed by JSONL)
+    duckdb_count = _collect_duckdb_sessions(days=days, quiet=quiet, rebuild=rebuild)
+    if duckdb_count and not quiet:
+        print(f"[Token Optimizer] Imported {duckdb_count} sessions from analytics.duckdb")
+
     if not quiet:
-        total = conn_total_sessions() if TRENDS_DB.exists() else new_count
+        total = conn_total_sessions() if TRENDS_DB.exists() else new_count + (duckdb_count or 0)
         print(f"[Token Optimizer] Collected {new_count} new sessions. Total in DB: {total}")
-    return new_count
+    return new_count + (duckdb_count or 0)
 
 
 def conn_total_sessions():
@@ -9331,7 +9456,48 @@ def _query_trends_db(conn, days):
         "pricing_tier": pricing_tier,
         "pricing_tier_label": tier_label,
         "source": "sqlite",
+        "surface_breakdown": _surface_breakdown_from_db(conn, cutoff),
     }
+
+
+def _classify_surface(jsonl_path):
+    """Classify a session's surface from its jsonl_path dedup key."""
+    if not jsonl_path:
+        return "claude-code"
+    path_str = str(jsonl_path)
+    if path_str.startswith("duckdb:"):
+        # DuckDB sessions: slug tells us if chat or agent
+        return "desktop-agent"
+    if path_str.startswith("hermes:"):
+        return "hermes"
+    if "local-agent-mode-sessions" in path_str:
+        return "cowork"
+    return "claude-code"
+
+
+def _surface_breakdown_from_db(conn, cutoff):
+    """Build per-surface breakdown from session_log rows."""
+    rows = conn.execute(
+        """SELECT jsonl_path, input_tokens, output_tokens, slug
+           FROM session_log WHERE date >= ?""",
+        (cutoff,),
+    ).fetchall()
+
+    breakdown = {}
+    for r in rows:
+        surface = _classify_surface(r["jsonl_path"])
+        # Refine duckdb rows: check slug for chat vs agent
+        if surface == "desktop-agent":
+            slug = r["slug"] or ""
+            if slug.startswith("chat:"):
+                surface = "chat"
+        if surface not in breakdown:
+            breakdown[surface] = {"sessions": 0, "input_tokens": 0, "output_tokens": 0}
+        breakdown[surface]["sessions"] += 1
+        breakdown[surface]["input_tokens"] += int(r["input_tokens"] or 0)
+        breakdown[surface]["output_tokens"] += int(r["output_tokens"] or 0)
+
+    return breakdown
 
 
 def _collect_trends_from_jsonl(days=30):

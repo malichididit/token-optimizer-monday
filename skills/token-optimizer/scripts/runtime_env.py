@@ -250,6 +250,26 @@ def runtime_home() -> Path:
     return claude_home()
 
 
+def cowork_sessions_dir() -> Path:
+    """Return the Cowork (Claude Desktop agent-mode) sessions directory.
+
+    macOS: ~/Library/Application Support/Claude/local-agent-mode-sessions
+    Linux: ~/.config/Claude/local-agent-mode-sessions
+
+    This is independent of detect_runtime() -- Cowork co-exists with Claude Code
+    on the same machine, so the adapter runs whenever this directory exists.
+    """
+    if sys.platform == "darwin":
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "local-agent-mode-sessions"
+        )
+    return Path.home() / ".config" / "Claude" / "local-agent-mode-sessions"
+
+
 def plugin_data_env_vars() -> tuple[str, ...]:
     """Return plugin-data env vars in runtime-specific priority order."""
     if detect_runtime() in (_RUNTIME_CODEX, _RUNTIME_HERMES, _RUNTIME_OPENCODE):
