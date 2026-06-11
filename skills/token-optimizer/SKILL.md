@@ -1,12 +1,12 @@
 ---
 name: token-optimizer
-description: Find the ghost tokens. Audit Claude Code or Codex setup, see where context goes, fix it. Use when context feels tight.
+description: Find the ghost tokens. Audit Claude Code, Cowork, or Codex setup, see where context goes, fix it. Use when context feels tight.
 effort: high
 ---
 
 # Token Optimizer
 
-Audits a Claude Code or Codex setup, identifies context window waste, implements fixes, and measures savings.
+Audits a Claude Code or Codex setup (including Cowork/Claude Desktop agent-mode sessions), identifies context window waste, implements fixes, and measures savings.
 
 **Target**: 5-15% context recovery through config cleanup, up to 25%+ with autocompact management.
 
@@ -30,6 +30,27 @@ python3 "$MEASURE_PY" report 2>/dev/null | head -1
 
 ---
 
+## Cowork (Claude Desktop Agent-Mode)
+
+Cowork sessions are audited **alongside** Claude Code — not as a separate runtime.
+The Cowork adapter (`cowork_session.py`) discovers audit.jsonl files under:
+- macOS: `~/Library/Application Support/Claude/local-agent-mode-sessions/`
+- Linux: `~/.config/Claude/local-agent-mode-sessions/`
+
+Cowork data flows into the dashboard automatically via `measure.py dashboard`.
+During the audit, the orchestrator should also present Cowork behavioral findings
+(permission interrupts, rate limits, model usage, session duration) if sessions exist.
+
+Quick check:
+```bash
+python3 "$MEASURE_PY" cowork-summary 2>/dev/null || echo "No Cowork sessions found"
+```
+
+If Cowork sessions are found, include a **Cowork Insights** section in Phase 3
+alongside the Claude Code findings. The dashboard Cowork tab renders automatically.
+
+---
+
 ## Phase 0: Initialize (Claude Code)
 
 Resolve measure.py path:
@@ -50,7 +71,7 @@ Read `references/phase0-setup.md` for the full setup sequence: context window de
 
 Read `references/agent-prompts.md` for all prompt templates.
 
-Dispatch 6 agents in parallel:
+Dispatch 7 agents in parallel:
 
 | Agent | Output File | Model | Task |
 |-------|-------------|-------|------|
@@ -60,6 +81,7 @@ Dispatch 6 agents in parallel:
 | MCP Auditor | `audit/mcp.md` | sonnet | Deferred tools, broken/unused servers |
 | Commands Auditor | `audit/commands.md` | haiku | Count, menu overhead |
 | Settings & Advanced | `audit/advanced.md` | sonnet | Hooks, rules, settings, @imports, caching |
+| Cowork Auditor | `audit/cowork.md` | haiku | Session patterns, permission flow, rate limits, model usage |
 
 Pass `COORD_PATH` to each. Wait for all to complete. If any output file is missing, note the gap and proceed.
 

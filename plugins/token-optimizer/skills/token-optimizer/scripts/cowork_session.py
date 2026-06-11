@@ -310,3 +310,121 @@ def parse_session_turns(filepath: str | Path) -> list[dict[str, Any]]:
         return []
 
     return turns
+
+
+
+def aggregate_cowork_insights(days: int = 30) -> dict[str, Any]:
+    """Scan all Cowork audit.jsonl files and extract behavioral insights.
+
+    Returns:
+        {
+            total_rate_limit_events: int,
+            rate_limit_blocked_count: int,
+            total_permission_requests: int,
+            avg_per_session: float,
+            model_distribution: {model: session_count},
+            top_tools: {tool_name: use_count},
+            session_durations: [float],  # minutes
+            session_count: int,
+        }
+    """
+    audit_files = find_all_audit_files(days=days)
+    if not audit_files:
+        return {
+            "total_rate_limit_events": 0,
+            "rate_limit_blocked_count": 0,
+            "total_permission_requests": 0,
+            "avg_per_session": 0.0,
+            "model_distribution": {},
+            "top_tools": {},
+            "session_durations": [],
+            "session_count": 0,
+        }
+
+    total_rate_limit = 0
+    rate_limit_blocked = 0
+    total_permissions = 0
+    model_sessions: dict[str, int] = {}
+    tool_counts: dict[str, int] = {}
+    durations: list[float] = []
+    valid_sessions = 0
+
+    for audit_path, _, _ in audit_files:
+        session_permissions = 0
+        session_models: set[str] = set()
+        session_tools: dict[str, int] = {}
+        first_ts: datetime | None = None
+        last_ts: datetime | None = None
+        has_assistant = False
+
+        try:
+            with open(audit_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        record = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    rec_type = record.get("type", "")
+                    rec_subtype = record.get("subtype", "")
+
+                    ts_str = record.get("_audit_timestamp")
+                    ts = _parse_iso_timestamp(ts_str)
+                    if ts:
+                        if first_ts is None:
+                            first_ts = ts
+                        last_ts = ts
+
+                    if rec_type == "system" and rec_subtype == "permission_request":
+                        session_permissions += 1
+                        total_permissions += 1
+                        continue
+
+                    if rec_type == "rate_limit_event" or rec_subtype == "rate_limit":
+                        total_rate_limit += 1
+                        if record.get("blocked"):
+                            rate_limit_blocked += 1
+                        continue
+
+                    if rec_type == "assistant":
+                        has_assistant = True
+                        msg = record.get("message") or {}
+                        model = msg.get("model", "")
+                        if model:
+                            session_models.add(model)
+                        content = msg.get("content") or []
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "tool_use":
+                                    tool_name = block.get("name", "unknown")
+                                    session_tools[tool_name] = session_tools.get(tool_name, 0) + 1
+                        continue
+
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        if not has_assistant:
+            continue
+
+        valid_sessions += 1
+        for m in session_models:
+            model_sessions[m] = model_sessions.get(m, 0) + 1
+        for tool, cnt in session_tools.items():
+            tool_counts[tool] = tool_counts.get(tool, 0) + cnt
+
+        if first_ts and last_ts:
+            dur = (last_ts - first_ts).total_seconds() / 60.0
+            durations.append(round(max(0.0, dur), 1))
+
+    top_tools = dict(sorted(tool_counts.items(), key=lambda x: -x[1])[:20])
+
+    return {
+        "total_rate_limit_events": total_rate_limit,
+        "rate_limit_blocked_count": rate_limit_blocked,
+        "total_permission_requests": total_permissions,
+        "avg_per_session": round(total_permissions / max(valid_sessions, 1), 1),
+        "model_distribution": dict(sorted(model_sessions.items(), key=lambda x: -x[1])),
+        "top_tools": top_tools,
+        "session_durations": durations,
+        "session_count": valid_sessions,
+    }

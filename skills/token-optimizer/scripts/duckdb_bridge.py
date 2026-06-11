@@ -183,3 +183,186 @@ def normalize_session(row: dict[str, Any]) -> dict[str, Any] | None:
         "is_agent": is_agent,
         "session_id": session_id,
     }
+
+
+
+def model_routing_waste(days: int = 30) -> dict[str, Any]:
+    """Find Opus messages with short outputs that could have used Sonnet.
+
+    Returns {opus_short_cost, sonnet_equiv, savings, msg_count} or empty dict.
+    """
+    if not is_available():
+        return {}
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    sql = f"""
+        SELECT
+            COUNT(*) as msg_count,
+            COALESCE(SUM(est_cost_usd), 0) as total_cost
+        FROM messages
+        WHERE timestamp >= '{cutoff}'
+          AND model LIKE '%opus%'
+          AND output_tokens < 200
+          AND (stop_reason = 'end_turn' OR stop_reason = 'tool_use')
+    """
+    rows = _query_duckdb(sql)
+    if not rows or not rows[0].get("msg_count"):
+        return {"opus_short_cost": 0, "sonnet_equiv": 0, "savings": 0, "msg_count": 0}
+
+    msg_count = int(rows[0]["msg_count"])
+    opus_cost = float(rows[0]["total_cost"] or 0)
+    sonnet_equiv = opus_cost * 0.2
+    return {
+        "opus_short_cost": round(opus_cost, 2),
+        "sonnet_equiv": round(sonnet_equiv, 2),
+        "savings": round(opus_cost - sonnet_equiv, 2),
+        "msg_count": msg_count,
+    }
+
+
+def marathon_sessions(days: int = 30) -> list[dict[str, Any]]:
+    """Find sessions with >50 messages indicating context bloat.
+
+    Returns list of {session_id, message_count, total_tokens, cost}.
+    """
+    if not is_available():
+        return []
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    sql = f"""
+        SELECT
+            session_id,
+            COUNT(*) as message_count,
+            COALESCE(SUM(total_tokens), 0) as total_tokens,
+            COALESCE(SUM(est_cost_usd), 0) as cost
+        FROM messages
+        WHERE timestamp >= '{cutoff}' AND is_agent = false
+        GROUP BY session_id
+        HAVING COUNT(*) > 50
+        ORDER BY cost DESC
+    """
+    rows = _query_duckdb(sql)
+    return [
+        {
+            "session_id": r.get("session_id", ""),
+            "message_count": int(r.get("message_count", 0)),
+            "total_tokens": int(r.get("total_tokens", 0)),
+            "cost": round(float(r.get("cost", 0)), 2),
+        }
+        for r in rows
+    ]
+
+
+def model_inertia_rate(days: int = 30) -> dict[str, Any]:
+    """Percentage of sessions (>5 msgs) that never switch models.
+
+    Returns {single_model_sessions, total_sessions, inertia_pct}.
+    """
+    if not is_available():
+        return {}
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    sql = f"""
+        SELECT
+            session_id,
+            COUNT(DISTINCT model) as model_count
+        FROM messages
+        WHERE timestamp >= '{cutoff}' AND is_agent = false
+        GROUP BY session_id
+        HAVING COUNT(*) > 5
+    """
+    rows = _query_duckdb(sql)
+    if not rows:
+        return {"single_model_sessions": 0, "total_sessions": 0, "inertia_pct": 0}
+
+    total = len(rows)
+    single = sum(1 for r in rows if int(r.get("model_count", 0)) == 1)
+    return {
+        "single_model_sessions": single,
+        "total_sessions": total,
+        "inertia_pct": round(100 * single / max(total, 1), 1),
+    }
+
+
+def subagent_cost_breakdown(days: int = 30) -> dict[str, Any]:
+    """Cost breakdown by agent type from entities + messages.
+
+    Returns {total_agent_cost, total_main_cost, pct_of_total}.
+    """
+    if not is_available():
+        return {}
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    sql = f"""
+        SELECT
+            is_agent,
+            COALESCE(SUM(est_cost_usd), 0) as cost
+        FROM messages
+        WHERE timestamp >= '{cutoff}'
+        GROUP BY is_agent
+    """
+    rows = _query_duckdb(sql)
+    if not rows:
+        return {}
+
+    main_cost = 0.0
+    agent_cost = 0.0
+    for r in rows:
+        is_agent_val = str(r.get("is_agent", "false")).lower() in ("true", "1", "t")
+        c = float(r.get("cost", 0))
+        if is_agent_val:
+            agent_cost = c
+        else:
+            main_cost = c
+
+    total = main_cost + agent_cost
+    return {
+        "total_agent_cost": round(agent_cost, 2),
+        "total_main_cost": round(main_cost, 2),
+        "pct_of_total": round(100 * agent_cost / max(total, 0.01), 1),
+    }
+
+
+def hourly_spend_pattern(days: int = 30) -> list[dict[str, Any]]:
+    """Cost per hour-of-day for identifying peak usage hours.
+
+    Returns list of {hour, cost, message_count} for hours 0-23.
+    """
+    if not is_available():
+        return []
+
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    sql = f"""
+        SELECT
+            EXTRACT(HOUR FROM CAST(timestamp AS TIMESTAMP)) as hour,
+            COALESCE(SUM(est_cost_usd), 0) as cost,
+            COUNT(*) as message_count
+        FROM messages
+        WHERE timestamp >= '{cutoff}'
+        GROUP BY EXTRACT(HOUR FROM CAST(timestamp AS TIMESTAMP))
+        ORDER BY hour
+    """
+    rows = _query_duckdb(sql)
+    return [
+        {
+            "hour": int(r.get("hour", 0)),
+            "cost": round(float(r.get("cost", 0)), 2),
+            "message_count": int(r.get("message_count", 0)),
+        }
+        for r in rows
+    ]

@@ -5083,6 +5083,20 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     if not quiet and rec_count > 0:
         print(f"  Found {rec_count} auto-recommendations")
 
+    # Compute behavioral insights for surface filter
+    if not quiet:
+        print("  Computing behavioral insights...")
+    try:
+        behavioral_insights = _compute_behavioral_insights(days=days)
+    except Exception:
+        behavioral_insights = {"claude-code": {}, "cowork": {}}
+
+    # Generate Cowork-specific recommendations
+    try:
+        cowork_plan, cowork_rec_count = _generate_cowork_auto_recommendations(behavioral_insights)
+    except Exception:
+        cowork_plan, cowork_rec_count = "", 0
+
     # Generate coach data for the Coach tab (reuse already-collected components/trends)
     if not quiet:
         print("  Generating coach data...")
@@ -5239,6 +5253,8 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
         "memory_review": mr_data,
         "claude_md_health": claude_md_health,
         "v5_recommendation": _get_v5_savings_recommendation(),
+        "behavioral_insights": behavioral_insights,
+        "cowork_plan": cowork_plan if cowork_plan else None,
         "version": TOKEN_OPTIMIZER_VERSION,
         "runtime": detect_runtime(),
         "runtime_label": runtime_name_for_humans(),
@@ -5549,6 +5565,171 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
 
     plan_md = "\n\n".join(sections) if sections else ""
     total_count = len(quick) + len(medium) + len(deep) + len(habits)
+    return plan_md, total_count
+
+
+def _compute_behavioral_insights(days=30):
+    """Orchestrate DuckDB and Cowork insight functions into a unified dict.
+
+    Returns a dict keyed by surface with behavioral insight data.
+    Either source may be unavailable — returns empty sub-dict gracefully.
+    """
+    result = {"claude-code": {}, "cowork": {}}
+
+    # Claude Code insights from DuckDB
+    try:
+        from duckdb_bridge import (
+            is_available as duckdb_available,
+            model_routing_waste,
+            marathon_sessions,
+            model_inertia_rate,
+            subagent_cost_breakdown,
+            hourly_spend_pattern,
+        )
+
+        if duckdb_available():
+            result["claude-code"] = {
+                "model_routing_waste": model_routing_waste(days=days),
+                "marathon_sessions": marathon_sessions(days=days),
+                "model_inertia_pct": model_inertia_rate(days=days).get("inertia_pct", 0),
+                "model_inertia_detail": model_inertia_rate(days=days),
+                "subagent_breakdown": subagent_cost_breakdown(days=days),
+                "hourly_pattern": hourly_spend_pattern(days=days),
+            }
+    except (ImportError, Exception):
+        pass
+
+    # Cowork insights from audit.jsonl
+    try:
+        from cowork_session import aggregate_cowork_insights
+
+        ci = aggregate_cowork_insights(days=days)
+        if ci and ci.get("session_count", 0) > 0:
+            result["cowork"] = {
+                "permission_interrupts": {
+                    "total": ci["total_permission_requests"],
+                    "avg_per_session": ci["avg_per_session"],
+                },
+                "rate_limit_status": {
+                    "total_events": ci["total_rate_limit_events"],
+                    "blocked_count": ci["rate_limit_blocked_count"],
+                },
+                "model_usage": ci["model_distribution"],
+                "top_tools": ci["top_tools"],
+                "session_count": ci["session_count"],
+                "avg_duration_min": round(
+                    sum(ci["session_durations"]) / max(len(ci["session_durations"]), 1), 1
+                ) if ci["session_durations"] else 0,
+            }
+    except (ImportError, Exception):
+        pass
+
+    return result
+
+
+def _generate_cowork_auto_recommendations(behavioral_insights):
+    """Generate Cowork-specific optimization recommendations.
+
+    Uses the same markdown format as generate_auto_recommendations so
+    parsePlan() in the dashboard can parse it identically.
+
+    Returns (plan_markdown_string, recommendation_count).
+    """
+    cw = (behavioral_insights or {}).get("cowork", {})
+    if not cw or cw.get("session_count", 0) == 0:
+        return "", 0
+
+    medium = []
+    deep = []
+    habits = []
+
+    # Medium: Auto-approve trusted tools
+    perm = cw.get("permission_interrupts", {})
+    avg_perm = perm.get("avg_per_session", 0)
+    if avg_perm > 5:
+        medium.append(
+            f"**Auto-approve trusted MCP tools**: "
+            f"Your Cowork sessions average {avg_perm:.1f} permission prompts per session. "
+            f"Each interrupt breaks flow and adds latency. "
+            f"In your MCP config, set `alwaysAllow` for tools you trust "
+            f"(file reads, search, linting). Keep write/delete tools gated."
+        )
+
+    # Medium: Consider Sonnet for scheduled tasks
+    mu = cw.get("model_usage", {})
+    mu_total = sum(mu.values()) if mu else 0
+    if mu_total > 0:
+        top_model = max(mu, key=mu.get) if mu else ""
+        top_pct = mu.get(top_model, 0) / mu_total * 100
+        if "opus" in top_model.lower() and top_pct > 70:
+            medium.append(
+                f"**Use Sonnet for routine Cowork tasks**: "
+                f"{top_model} handles {top_pct:.0f}% of your Cowork sessions. "
+                f"Sonnet is 5x cheaper and fast enough for code generation, "
+                f"file edits, and search tasks. Reserve Opus for complex reasoning."
+            )
+
+    # Deep: Reduce rate-limit pressure
+    rl = cw.get("rate_limit_status", {})
+    rl_total = rl.get("total_events", 0)
+    if rl_total > 20:
+        deep.append(
+            f"**Reduce rate-limit pressure with tool batching**: "
+            f"You've hit {rl_total} rate-limit events across Cowork sessions. "
+            f"Batch related tool calls into single turns where possible. "
+            f"Group file reads, combine search queries, and avoid sequential "
+            f"single-tool turns."
+        )
+
+    # Deep: Consolidate MCP tool sources
+    top_tools = cw.get("top_tools", {})
+    if len(top_tools) > 10:
+        deep.append(
+            f"**Consolidate MCP tool sources**: "
+            f"You're using {len(top_tools)} distinct MCP tools. "
+            f"Each tool definition adds to context overhead. "
+            f"Review whether overlapping tools can be consolidated "
+            f"or rarely-used tools can be removed from your config."
+        )
+
+    # Habits: Check session duration
+    avg_dur = cw.get("avg_duration_min", 0)
+    if avg_dur > 60:
+        habits.append(
+            f"**Monitor Cowork session length**: "
+            f"Your average Cowork session is {avg_dur:.0f} minutes. "
+            f"Long sessions accumulate context and may drift off-task. "
+            f"Consider breaking work into focused sessions under 45 minutes."
+        )
+
+    # Habits: Review rate limit trajectory
+    if rl_total > 5:
+        habits.append(
+            f"**Track rate-limit trends**: "
+            f"{rl_total} rate-limit events detected. "
+            f"Monitor whether this is increasing as you add more tools "
+            f"or sessions. Persistent rate limiting degrades throughput."
+        )
+
+    # Habits: Permission flow awareness
+    if avg_perm > 2:
+        habits.append(
+            f"**Streamline permission flow**: "
+            f"Averaging {avg_perm:.1f} permission requests per session. "
+            f"Each prompt interrupts autonomous work. Review which tools "
+            f"trigger permissions and whether they can be pre-approved."
+        )
+
+    sections = []
+    if medium:
+        sections.append("## Medium Effort\n\n" + "\n\n".join(f"- [ ] {item}" for item in medium))
+    if deep:
+        sections.append("## Deep Optimization\n\n" + "\n\n".join(f"- [ ] {item}" for item in deep))
+    if habits:
+        sections.append("## Behavioral Habits\n\n" + "\n\n".join(f"- [ ] {item}" for item in habits))
+
+    plan_md = "\n\n".join(sections) if sections else ""
+    total_count = len(medium) + len(deep) + len(habits)
     return plan_md, total_count
 
 
@@ -9418,6 +9599,71 @@ def _query_trends_db(conn, days):
     pricing_tier = _load_pricing_tier()
     tier_label = _pricing_tier_label(pricing_tier)
 
+    # Per-surface trends for surface filter UI
+    per_surface_trends = {}
+    surface_sessions = {}
+    for sr in session_rows:
+        surface = _classify_surface(sr["jsonl_path"])
+        slug = sr["slug"] or ""
+        if surface == "claude-code" and slug.startswith("chat:"):
+            surface = "chat"
+        if surface not in surface_sessions:
+            surface_sessions[surface] = []
+        surface_sessions[surface].append(sr)
+
+    for surface, rows in surface_sessions.items():
+        s_count = len(rows)
+        s_tokens = sum((r["input_tokens"] or 0) + (r["output_tokens"] or 0) for r in rows)
+        s_cost = 0.0
+        s_models = {}
+        s_duration_total = 0.0
+        s_daily = {}
+        for sr in rows:
+            s_duration_total += sr["duration_minutes"] or 0
+            try:
+                mu_raw = sr["model_usage_json"]
+                mu = json.loads(mu_raw) if mu_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                mu = {}
+            for m, t_count in mu.items():
+                s_models[m] = s_models.get(m, 0) + t_count
+            inp_t = sr["input_tokens"] or 0
+            out_t = sr["output_tokens"] or 0
+            chr_v = sr["cache_hit_rate"] or 0
+            cc1 = sr["cache_create_1h_tokens"] or 0
+            cc5 = sr["cache_create_5m_tokens"] or 0
+            try:
+                mb_r = sr["model_usage_breakdown_json"]
+                mb_d = json.loads(mb_r) if mb_r else {}
+            except (json.JSONDecodeError, TypeError):
+                mb_d = {}
+            dom = max(mu, key=mu.get) if mu else "unknown"
+            sc = _cost_from_model_breakdown(mb_d, tier=pricing_tier,
+                                            cache_create_1h=cc1 if cc1 or cc5 else None,
+                                            cache_create_5m=cc5 if cc1 or cc5 else None)
+            if sc == 0.0:
+                cr_est = int(inp_t * chr_v)
+                cc_tot = cc1 + cc5
+                uc_est = max(0, inp_t - cr_est - cc_tot)
+                sc = _get_model_cost(dom, uc_est, out_t, cr_est, cc_tot, tier=pricing_tier)
+            s_cost += sc
+
+            date = sr["date"]
+            if date not in s_daily:
+                s_daily[date] = {"date": date, "sessions": 0, "tokens": 0, "cost_usd": 0.0}
+            s_daily[date]["sessions"] += 1
+            s_daily[date]["tokens"] += inp_t + out_t
+            s_daily[date]["cost_usd"] += sc
+
+        per_surface_trends[surface] = {
+            "session_count": s_count,
+            "total_tokens": s_tokens,
+            "total_cost_usd": round(s_cost, 4),
+            "model_mix": dict(sorted(s_models.items(), key=lambda x: -x[1])),
+            "duration_avg_min": round(s_duration_total / s_count, 1) if s_count else 0,
+            "daily": sorted(s_daily.values(), key=lambda x: x["date"], reverse=True),
+        }
+
     return {
         "period_days": days,
         "session_count": session_count,
@@ -9457,6 +9703,7 @@ def _query_trends_db(conn, days):
         "pricing_tier_label": tier_label,
         "source": "sqlite",
         "surface_breakdown": _surface_breakdown_from_db(conn, cutoff),
+        "per_surface_trends": per_surface_trends,
     }
 
 
@@ -23140,6 +23387,44 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args[0] == "codex-state":
         codex_state_report(as_json="--json" in args)
+    elif args[0] == "cowork-summary":
+        import json as _json_mod
+        days = 30
+        as_json = "--json" in args
+        i = 1
+        while i < len(args):
+            if args[i] == "--days" and i + 1 < len(args):
+                try:
+                    days = int(args[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            else:
+                i += 1
+        ci = cowork_session.aggregate_cowork_insights(days=days)
+        if ci.get("session_count", 0) == 0:
+            print("No Cowork sessions found.")
+            sys.exit(1)
+        if as_json:
+            print(_json_mod.dumps(ci, indent=2, default=str))
+        else:
+            print(f"  Cowork Sessions (last {days} days)")
+            print(f"  ========================================")
+            print(f"    Sessions:           {ci['session_count']}")
+            print(f"    Permission requests: {ci['total_permission_requests']} total ({ci['avg_per_session']:.1f} avg/session)")
+            print(f"    Rate limit events:  {ci['total_rate_limit_events']} ({ci['rate_limit_blocked_count']} blocked)")
+            if ci.get("model_distribution"):
+                print(f"    Model distribution:")
+                for model, count in list(ci["model_distribution"].items())[:5]:
+                    print(f"      {model}: {count} sessions")
+            if ci.get("session_durations"):
+                avg_dur = sum(ci["session_durations"]) / len(ci["session_durations"])
+                print(f"    Avg duration:       {avg_dur:.1f} min")
+            if ci.get("top_tools"):
+                print(f"    Top tools:")
+                for tool, cnt in list(ci["top_tools"].items())[:5]:
+                    print(f"      {tool}: {cnt} calls")
+        sys.exit(0)
     elif args[0] == "drift":
         output_json = "--json" in args
         drift_check(as_json=output_json)

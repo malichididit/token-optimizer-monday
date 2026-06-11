@@ -2,7 +2,7 @@
 
 ## Findings Template
 
-Read the optimization plan and present. For MODEL ROUTING, also read `{COORD_PATH}/audit/advanced.md` for "Has routing instructions" and "Usage Pattern" data.
+Read the optimization plan and present. For MODEL ROUTING, also read `{COORD_PATH}/audit/advanced.md` for "Has routing instructions" and "Usage Pattern" data. For COWORK, read `{COORD_PATH}/audit/cowork.md` for session behavioral insights.
 
 ```
 [Token Optimizer Results]
@@ -18,6 +18,12 @@ QUICK WINS (do these today)
 MODEL ROUTING
 [Has instructions: Yes/No] | [Token distribution: X% Opus, Y% Sonnet, Z% Haiku or "Not measured yet"]
 
+COWORK (Claude Desktop Agent-Mode)
+[Sessions: X in last 30 days | Avg duration: Y min | Permissions: Z avg/session]
+[Model mix: X% Opus, Y% Sonnet, Z% Haiku | Rate limits: N events]
+Recommendations: [auto-approve trusted tools / batch tool calls / use Sonnet for routine tasks]
+(If no Cowork sessions found, omit this section entirely.)
+
 FULL OPTIMIZATION POTENTIAL
 If all implemented: ~X tokens/msg saved (~Y% reduction)
 
@@ -26,6 +32,7 @@ Ready to implement? I can:
 2. Generate permissions.deny rules (if missing)
 3. Create optimized CLAUDE.md template
 4. Show MCP servers to consider disabling
+5. Apply Cowork optimizations (permission auto-approve, model routing)
 
 Some optimizations have side effects:
 - Deny rules block file access for ALL tools (may break MCP servers that read databases)

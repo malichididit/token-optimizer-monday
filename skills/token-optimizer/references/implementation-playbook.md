@@ -348,6 +348,47 @@ Check the user's Claude Code version (`claude --version`) and apply version-spec
 
 ---
 
+
+---
+
+## 4Q: Cowork Optimization
+
+**Prerequisite**: Cowork sessions detected (via `cowork_session.find_all_audit_files()`).
+
+**Steps**:
+1. Run behavioral insights:
+   ```bash
+   python3 $MEASURE_PY cowork-summary
+   ```
+2. Based on findings, offer these actions:
+
+### Permission Auto-Approve
+If avg permission requests per session > 5:
+- Identify most-requested tools from the audit
+- Suggest adding `alwaysAllow` entries in Claude Desktop MCP config
+- Only for read/search tools — keep write/delete gated
+- Show the config change as a diff before applying
+
+### Model Routing for Cowork
+If Opus usage > 70% of Cowork sessions:
+- Suggest switching default model to Sonnet for routine tasks
+- Reserve Opus for complex reasoning sessions
+- Show cost differential (Opus vs Sonnet pricing)
+
+### Rate Limit Mitigation
+If rate limit events > 20:
+- Recommend tool batching patterns
+- Suggest grouping related reads into single turns
+- Show examples of batch vs sequential tool calls
+
+### Session Duration Guidance
+If avg session duration > 60 minutes:
+- Recommend breaking into focused sub-tasks
+- Suggest session splitting at natural boundaries
+- Note context degradation in long sessions
+
+**Side effects**: None — Cowork changes are in Claude Desktop config, not Claude Code.
+
 ## Anti-Patterns
 
 | DON'T | DO |

@@ -203,6 +203,42 @@ h1, h2, h3, h4 { font-weight: 400; }
   text-shadow: 0 0 5px var(--c-accent-cyan);
 }
 
+.surface-filter {
+  display: flex;
+  gap: 4px;
+  padding: 8px var(--s-2);
+  margin-top: 6px;
+  margin-bottom: 8px;
+}
+.surface-filter.hidden { display: none; }
+.surface-pill {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--c-border);
+  color: var(--c-text-dim);
+  background: transparent;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.surface-pill:hover { border-color: var(--c-accent-cyan); color: var(--c-text-main); }
+.surface-pill.active {
+  background: var(--c-accent-cyan);
+  color: var(--c-bg);
+  border-color: var(--c-accent-cyan);
+  font-weight: 600;
+}
+.surface-badge {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  padding: 6px var(--s-2);
+  line-height: 1.4;
+}
+
 .user-profile {
   font-size: 15px;
   color: var(--c-text-dim);
@@ -1672,6 +1708,12 @@ window.__TOKEN_DATA__ = null;
   <nav class="nav-col">
     <div>
       <div class="brand"><span></span> Token Optimizer <small id="brand-runtime" style="display:block;margin-left:27px;margin-top:2px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--c-text-dim);font-weight:600;"></small></div>
+      <div class="surface-filter hidden" id="surface-filter">
+        <button class="surface-pill active" data-surface="all">All</button>
+        <button class="surface-pill" data-surface="claude-code">Code</button>
+        <button class="surface-pill" data-surface="cowork">Cowork</button>
+      </div>
+      <div class="surface-badge hidden" id="surface-badge-chat"></div>
       <div class="nav-menu">
         <a class="nav-item active" data-view="overview">Overview</a>
         <a class="nav-item" data-view="savings">Savings</a>
@@ -2269,15 +2311,112 @@ var DB = (function() {
     }
   }
 
-  function renderNav() {
+  function updateNavBadges() {
+    var activeSurface = window.__activeSurface || 'all';
+    var sourceItems = items;
+    if (activeSurface === 'cowork' && data.cowork_plan) {
+      var cwParsed = parsePlan(data.cowork_plan);
+      cwParsed.forEach(function(it) { it.section = groupMap[it.group] || 'habits'; });
+      sourceItems = cwParsed;
+    }
     var counts = { quick: 0, medium: 0, deep: 0, habits: 0 };
-    items.forEach(function(it) { if (counts[it.section] !== undefined) counts[it.section]++; });
+    sourceItems.forEach(function(it) { if (counts[it.section] !== undefined) counts[it.section]++; });
     for (var k in counts) {
       var el = document.getElementById('badge-' + k);
       if (el) el.textContent = counts[k] || '';
     }
+  }
+
+  function renderNav() {
+    updateNavBadges();
     var ts = data.generated_at || new Date().toISOString();
     document.getElementById('nav-date').textContent = ts.slice(0,10);
+    initSurfaceFilter();
+  }
+
+  function initSurfaceFilter() {
+    var filterEl = document.getElementById('surface-filter');
+    var chatBadge = document.getElementById('surface-badge-chat');
+    if (!filterEl) return;
+
+    var t = data.trends;
+    var bi = data.behavioral_insights;
+    var surfaces = [];
+    if (t && t.per_surface_trends) {
+      var pst = t.per_surface_trends;
+      if (pst['claude-code'] && pst['claude-code'].session_count > 0) surfaces.push('claude-code');
+      if (pst['cowork'] && pst['cowork'].session_count > 0) surfaces.push('cowork');
+    } else {
+      var sb = (t && t.surface_breakdown) || {};
+      if (sb['claude-code'] || sb['code']) surfaces.push('claude-code');
+      if (sb['cowork']) surfaces.push('cowork');
+    }
+
+    if (surfaces.length < 2) {
+      filterEl.classList.add('hidden');
+      window.__activeSurface = 'all';
+      return;
+    }
+
+    filterEl.classList.remove('hidden');
+
+    var stored = null;
+    try { stored = localStorage.getItem('to_surface_filter'); } catch(e) {}
+    window.__activeSurface = stored || 'all';
+
+    var pills = filterEl.querySelectorAll('.surface-pill');
+    pills.forEach(function(pill) {
+      pill.classList.toggle('active', pill.getAttribute('data-surface') === window.__activeSurface);
+      pill.addEventListener('click', function() {
+        window.__activeSurface = this.getAttribute('data-surface');
+        try { localStorage.setItem('to_surface_filter', window.__activeSurface); } catch(e) {}
+        pills.forEach(function(p) { p.classList.remove('active'); });
+        this.classList.add('active');
+        rerenderForSurface();
+      });
+    });
+
+    if (chatBadge) {
+      var buddyTokens = data.buddy_tokens_today;
+      if (buddyTokens && buddyTokens > 0) {
+        chatBadge.textContent = 'Desktop Chat: ' + fn(buddyTokens) + ' tokens today';
+        chatBadge.classList.remove('hidden');
+      }
+    }
+    updateTabVisibility();
+  }
+
+  function rerenderForSurface() {
+    updateNavBadges();
+    safeRender('Trends', 'trends', renderTrends);
+    safeRender('Quick Wins', 'quick', function() { renderSectionViews('quick'); });
+    safeRender('Medium', 'medium', function() { renderSectionViews('medium'); });
+    safeRender('Deep', 'deep', function() { renderSectionViews('deep'); });
+    safeRender('Habits', 'habits', function() { renderSectionViews('habits'); });
+    safeRender('Coach', 'coach', renderCoach);
+    updateTabVisibility();
+  }
+
+  function updateTabVisibility() {
+    var surface = window.__activeSurface || 'all';
+    var hiddenTabs = [];
+    if (surface === 'cowork') hiddenTabs = ['health', 'manage'];
+
+    var navItems = document.querySelectorAll('.nav-item[data-view]');
+    navItems.forEach(function(item) {
+      var view = item.getAttribute('data-view');
+      if (hiddenTabs.indexOf(view) >= 0) {
+        item.style.display = 'none';
+      } else {
+        item.style.display = '';
+      }
+    });
+
+    var activeNav = document.querySelector('.nav-item.active');
+    if (activeNav && activeNav.style.display === 'none') {
+      var trendsNav = document.querySelector('.nav-item[data-view="trends"]');
+      if (trendsNav) trendsNav.click();
+    }
   }
 
   // v5.4.18: v5 feature metadata mirrors V5_FEATURES in measure.py. Used as a
@@ -2814,10 +2953,24 @@ var DB = (function() {
 
   function renderSectionViews(singleSec) {
     var sections = singleSec ? [singleSec] : ['quick', 'medium', 'deep', 'habits'];
+    var activeSurface = window.__activeSurface || 'all';
+
+    // Parse Cowork plan items when surface is cowork
+    var coworkItems = [];
+    if (activeSurface === 'cowork' && data.cowork_plan) {
+      var cwParsed = parsePlan(data.cowork_plan);
+      cwParsed.forEach(function(it, idx) {
+        it._i = 'cw_' + idx;
+        it.section = groupMap[it.group] || 'habits';
+      });
+      coworkItems = cwParsed;
+    }
+
     sections.forEach(function(sec) {
       var el = document.getElementById('view-' + sec);
       if (!el) return;
-      var secItems = items.filter(function(it) { return it.section === sec; });
+      var sourceItems = (activeSurface === 'cowork') ? coworkItems : items;
+      var secItems = sourceItems.filter(function(it) { return it.section === sec; });
       var isHabits = (sec === 'habits');
 
       var ts = data.generated_at ? new Date(data.generated_at).toLocaleString() : 'unknown';
@@ -2906,7 +3059,155 @@ var DB = (function() {
 
       el.innerHTML = html;
       syncSelectAll(sec);
+
+      // Inject behavioral insights into quick wins section
+      if (sec === 'quick') {
+        renderBehavioralQuickWins(el);
+      }
     });
+  }
+
+  function renderBehavioralQuickWins(containerEl) {
+    var bi = data.behavioral_insights;
+    if (!bi) return;
+    var surface = window.__activeSurface || 'all';
+
+    var cards = [];
+    var codeInsights = bi['claude-code'] || {};
+    var coworkInsights = bi['cowork'] || {};
+
+    if ((surface === 'all' || surface === 'claude-code') && Object.keys(codeInsights).length > 0) {
+      var mrw = codeInsights.model_routing_waste || {};
+      if (mrw.msg_count > 0) {
+        cards.push({
+          title: 'Model Routing Waste',
+          value: '$' + (mrw.savings || 0).toFixed(0) + ' saveable/month',
+          detail: mrw.msg_count + ' Opus messages with short answers cost $' + (mrw.opus_short_cost || 0).toFixed(0) + '. Using Sonnet: ~$' + (mrw.sonnet_equiv || 0).toFixed(0) + '.',
+          color: '#ff9f43'
+        });
+      }
+
+      var ms = codeInsights.marathon_sessions || [];
+      if (ms.length > 0) {
+        var msCost = ms.reduce(function(sum, s) { return sum + (s.cost || 0); }, 0);
+        cards.push({
+          title: 'Marathon Sessions',
+          value: ms.length + ' sessions > 50 msgs',
+          detail: ms.length + ' sessions exceeded 50 messages ($' + msCost.toFixed(0) + ' total). Consider splitting with /clear.',
+          color: '#ff6b6b'
+        });
+      }
+
+      var inertia = codeInsights.model_inertia_pct;
+      if (inertia > 50) {
+        cards.push({
+          title: 'Model Inertia',
+          value: inertia + '% never switch',
+          detail: inertia + '% of sessions never switch models. Try /model for simple follow-ups.',
+          color: '#7d8ca3'
+        });
+      }
+
+      var sub = codeInsights.subagent_breakdown || {};
+      if (sub.total_agent_cost > 5) {
+        cards.push({
+          title: 'Sub-Agent Cost',
+          value: '$' + sub.total_agent_cost.toFixed(0) + ' (' + sub.pct_of_total + '%)',
+          detail: 'Sub-agents cost $' + sub.total_agent_cost.toFixed(0) + ' (' + sub.pct_of_total + '% of total spend).',
+          color: 'var(--c-accent-cyan)'
+        });
+      }
+    }
+
+    if (cards.length === 0 && (surface === 'cowork' || Object.keys(coworkInsights).length === 0)) return;
+
+    if (cards.length > 0) {
+      var insightHtml = '<div class="card wide" style="margin-top:var(--s-3);border:1px solid var(--c-border);">' +
+        '<div class="card-header"><span>Behavioral Insights — Claude Code</span>' +
+        '<span class="label" style="background:var(--c-accent-cyan);color:var(--c-bg);padding:2px 8px;border-radius:3px;">DATA-DRIVEN</span></div>';
+
+      cards.forEach(function(c) {
+        insightHtml += '<div style="border-left:3px solid ' + c.color + ';padding:12px var(--s-3);margin-bottom:8px;background:rgba(255,255,255,0.015);border-radius:0 6px 6px 0;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;">' +
+          '<div style="font-weight:600;font-size:15px;">' + esc(c.title) + '</div>' +
+          '<div style="font-family:var(--font-mono);font-size:14px;color:' + c.color + ';font-weight:600;">' + esc(c.value) + '</div>' +
+          '</div>' +
+          '<div style="font-size:13px;color:var(--c-text-dim);margin-top:4px;">' + esc(c.detail) + '</div>' +
+          '</div>';
+      });
+
+      insightHtml += '</div>';
+      containerEl.insertAdjacentHTML('beforeend', insightHtml);
+    }
+
+    // Cowork insights
+    var coworkCards = [];
+    if ((surface === 'all' || surface === 'cowork') && Object.keys(coworkInsights).length > 0) {
+      var perm = coworkInsights.permission_interrupts || {};
+      if (perm.total > 0) {
+        coworkCards.push({
+          title: 'Permission Overhead',
+          value: perm.total + ' requests',
+          detail: perm.total + ' permission requests (' + perm.avg_per_session + '/session avg). Consider auto-approve for trusted tools.',
+          color: '#ff9f43'
+        });
+      }
+
+      var rl = coworkInsights.rate_limit_status || {};
+      if (rl.total_events > 0) {
+        var rlStatus = rl.blocked_count > 0 ? 'Hitting limits!' : 'Approaching but not blocked.';
+        coworkCards.push({
+          title: 'Rate Limit Status',
+          value: rl.total_events + ' checks, ' + rl.blocked_count + ' blocked',
+          detail: rl.total_events + ' rate limit checks, ' + rl.blocked_count + ' blocked. ' + rlStatus,
+          color: rl.blocked_count > 0 ? '#ff6b6b' : '#22c55e'
+        });
+      }
+
+      var mu = coworkInsights.model_usage || {};
+      var muKeys = Object.keys(mu);
+      if (muKeys.length > 0) {
+        var topModel = muKeys[0] || 'unknown';
+        var topModelPct = coworkInsights.session_count > 0 ? Math.round(100 * (mu[topModel] || 0) / coworkInsights.session_count) : 0;
+        coworkCards.push({
+          title: 'Model Choice',
+          value: topModel.split('-').pop() + ' in ' + topModelPct + '%',
+          detail: topModel.split('/').pop() + ' used in ' + topModelPct + '% of Cowork sessions. Sonnet handles most scheduled tasks well.',
+          color: 'var(--c-accent-cyan)'
+        });
+      }
+
+      var tt = coworkInsights.top_tools || {};
+      var ttKeys = Object.keys(tt).slice(0, 5);
+      if (ttKeys.length > 0) {
+        var toolDetail = ttKeys.map(function(t) { return t + ' (' + tt[t] + 'x)'; }).join(', ');
+        coworkCards.push({
+          title: 'Top Tools',
+          value: ttKeys.length + ' tools tracked',
+          detail: 'Most used: ' + toolDetail,
+          color: '#7d8ca3'
+        });
+      }
+    }
+
+    if (coworkCards.length > 0) {
+      var coworkHtml = '<div class="card wide" style="margin-top:var(--s-3);border:1px solid var(--c-border);">' +
+        '<div class="card-header"><span>Behavioral Insights — Cowork</span>' +
+        '<span class="label" style="background:#a78bfa;color:var(--c-bg);padding:2px 8px;border-radius:3px;">DATA-DRIVEN</span></div>';
+
+      coworkCards.forEach(function(c) {
+        coworkHtml += '<div style="border-left:3px solid ' + c.color + ';padding:12px var(--s-3);margin-bottom:8px;background:rgba(255,255,255,0.015);border-radius:0 6px 6px 0;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;">' +
+          '<div style="font-weight:600;font-size:15px;">' + esc(c.title) + '</div>' +
+          '<div style="font-family:var(--font-mono);font-size:14px;color:' + c.color + ';font-weight:600;">' + esc(c.value) + '</div>' +
+          '</div>' +
+          '<div style="font-size:13px;color:var(--c-text-dim);margin-top:4px;">' + esc(c.detail) + '</div>' +
+          '</div>';
+      });
+
+      coworkHtml += '</div>';
+      containerEl.insertAdjacentHTML('beforeend', coworkHtml);
+    }
   }
 
   function splitDetailSections(detail) {
@@ -3011,21 +3312,39 @@ var DB = (function() {
       ? '<div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + cacheNote + '</div>'
       : '<div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Cache writes: ' + esc(globalTtlMix) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(globalTtlSessionLabel) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(ttlPeriodSummary || 'TTL period summary unavailable') + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + cacheNote + '</div>';
 
-    html += '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:var(--s-3)">' +
-      '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">' + tokenLabel + ' (' + t.period_days + 'd)</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + tokenNote + '</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">' + tokenBreakdownNote + '</div>' + codexCostNote + '</div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages (' + t.period_days + 'd)</div></div>' +
-      '</div>' +
-      '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
-      '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn((t.avg_input_tokens || 0) + (t.avg_output_tokens || 0)) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">' + cacheLabel + '</div>' + cacheExtra + '</div>' +
-      '</div>';
+    html += '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:var(--s-3)">';
+    var activeSurface = window.__activeSurface || 'all';
+    var pst = (t.per_surface_trends || {})[activeSurface];
+    if (activeSurface !== 'all' && pst) {
+      html +=
+        '<div class="stat-card"><div class="stat-card-value">' + pst.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value">' + fn(pst.total_tokens || 0) + '</div><div class="stat-card-label">Tokens (' + t.period_days + 'd)</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value">$' + (pst.total_cost_usd || 0).toFixed(2) + '</div><div class="stat-card-label">Estimated Cost</div></div>' +
+        '</div>' +
+        '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
+        '<div class="stat-card"><div class="stat-card-value">' + (pst.duration_avg_min || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value">' + fn(Math.round((pst.total_tokens || 0) / Math.max(pst.session_count, 1))) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value">' + Object.keys(pst.model_mix || {}).length + '</div><div class="stat-card-label">Models Used</div></div>' +
+        '</div>';
+    } else if (activeSurface !== 'all' && !pst) {
+      html += '<div class="stat-card" style="grid-column:1/-1"><div class="stat-card-value" style="font-size:16px;color:var(--c-text-dim)">No data for this surface</div></div></div>';
+    } else {
+      html +=
+        '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">' + tokenLabel + ' (' + t.period_days + 'd)</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + tokenNote + '</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">' + tokenBreakdownNote + '</div>' + codexCostNote + '</div>' +
+        '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages (' + t.period_days + 'd)</div></div>' +
+        '</div>' +
+        '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
+        '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value">' + fn((t.avg_input_tokens || 0) + (t.avg_output_tokens || 0)) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">' + cacheLabel + '</div>' + cacheExtra + '</div>' +
+        '</div>';
+    }
 
-    // Surface breakdown (Cowork, Chat, Code, Hermes)
+    // Surface breakdown (Cowork, Chat, Code, Hermes) — only in "all" mode
     var surfaceBreakdown = t.surface_breakdown || {};
     var surfaceKeys = Object.keys(surfaceBreakdown);
-    if (surfaceKeys.length > 1) {
+    if (surfaceKeys.length > 1 && (window.__activeSurface || 'all') === 'all') {
       var surfaceLabels = {
         "claude-code": "Claude Code",
         "cowork": "Cowork",
@@ -3066,56 +3385,94 @@ var DB = (function() {
     // Shared data for skills sections
     var skillsDetail = (data.snapshot && data.snapshot.components && data.snapshot.components.skills_detail) || {};
 
-    // Model mix stacked bar
-    var modelMix = t.model_mix || {};
-    var modelTotal = 0;
-    var modelOrder = isCodex ? Object.keys(modelMix).sort(function(a, b) { return (modelMix[b] || 0) - (modelMix[a] || 0); }) : ['opus', 'sonnet', 'haiku'];
-    var modelCount = 0;
-    for (var mk in modelMix) { modelTotal += modelMix[mk]; modelCount++; }
+    // Model mix stacked bar — Code/All only; Cowork shows its own model distribution
+    var activeSurface = window.__activeSurface || 'all';
 
-    if (modelTotal > 0) {
-      html += '<div class="card wide"><div class="card-header"><span>Model Mix (' + t.period_days + 'd)</span><span class="label">Which models do the work</span></div>';
-      if (isCodex) {
-        html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">Codex model names are read from session logs when available. Unknown future model IDs are shown by name but left unpriced until rates are known.</p>';
-      } else if (modelCount <= 1) {
-        var singleModel = Object.keys(modelMix)[0] || 'unknown';
-        html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">All sessions use ' + esc(singleModel) + '. Consider defaulting agents to haiku (5x cheaper) or sonnet for data-gathering tasks.</p>';
+    if (activeSurface !== 'cowork') {
+      var modelMix = t.model_mix || {};
+      var modelTotal = 0;
+      var modelOrder = isCodex ? Object.keys(modelMix).sort(function(a, b) { return (modelMix[b] || 0) - (modelMix[a] || 0); }) : ['opus', 'sonnet', 'haiku'];
+      var modelCount = 0;
+      for (var mk in modelMix) { modelTotal += modelMix[mk]; modelCount++; }
+
+      if (modelTotal > 0) {
+        html += '<div class="card wide"><div class="card-header"><span>Model Mix (' + t.period_days + 'd)</span><span class="label">Which models do the work</span></div>';
+        if (isCodex) {
+          html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">Codex model names are read from session logs when available. Unknown future model IDs are shown by name but left unpriced until rates are known.</p>';
+        } else if (modelCount <= 1) {
+          var singleModel = Object.keys(modelMix)[0] || 'unknown';
+          html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">All sessions use ' + esc(singleModel) + '. Consider defaulting agents to haiku (5x cheaper) or sonnet for data-gathering tasks.</p>';
+        } else {
+          html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">Haiku is 5x cheaper for data-gathering. If you see mostly Opus, consider defaulting agents to Sonnet/Haiku.</p>';
+        }
+        html += '<div class="model-bar">';
+        modelOrder.forEach(function(m) {
+          var tokens = modelMix[m] || 0;
+          if (tokens > 0) {
+            var pct = (tokens / modelTotal * 100).toFixed(1);
+            var color = isCodex ? ['#22d3ee','#60a5fa','#34d399','#f59e0b','#a78bfa','#f472b6'][modelOrder.indexOf(m) % 6] : '';
+            var bg = isCodex ? ';background:' + color : '';
+            html += '<div class="model-segment ' + m.replace(/[^a-z0-9-]/g,'') + '" style="width:' + pct + '%' + bg + '" title="' + esc(m) + ': ' + pct + '% (' + fn(tokens) + ' tokens)"></div>';
+          }
+        });
+        var otherTokens = 0;
+        for (var om in modelMix) { if (modelOrder.indexOf(om) === -1) otherTokens += modelMix[om]; }
+        if (otherTokens > 0) {
+          html += '<div class="model-segment other" style="width:' + (otherTokens/modelTotal*100).toFixed(1) + '%"></div>';
+        }
+        html += '</div><div class="model-legend">';
+        modelOrder.forEach(function(m) {
+          var tokens = modelMix[m] || 0;
+          if (tokens > 0) {
+            var pct = (tokens / modelTotal * 100).toFixed(0);
+            var dotColor = isCodex ? ' style="background:' + ['#22d3ee','#60a5fa','#34d399','#f59e0b','#a78bfa','#f472b6'][modelOrder.indexOf(m) % 6] + '"' : '';
+            html += '<div class="model-legend-item"><div class="model-legend-dot ' + m.replace(/[^a-z0-9-]/g,'') + '"' + dotColor + '></div>' + esc(m) + ' ' + pct + '% (' + fn(tokens) + ' tok)</div>';
+          }
+        });
+        if (otherTokens > 0) {
+          html += '<div class="model-legend-item"><div class="model-legend-dot other"></div>other ' + (otherTokens/modelTotal*100).toFixed(0) + '% (' + fn(otherTokens) + ' tok)</div>';
+        }
+        html += '</div></div>';
+      }
+    } else {
+      // Cowork model usage from behavioral insights
+      var cwBI = (data.behavioral_insights || {})['cowork'] || {};
+      var cwModels = cwBI.model_usage || {};
+      var cwModelKeys = Object.keys(cwModels).sort(function(a,b) { return (cwModels[b] || 0) - (cwModels[a] || 0); });
+      var cwModelTotal = 0;
+      cwModelKeys.forEach(function(k) { cwModelTotal += cwModels[k]; });
+      if (cwModelTotal > 0) {
+        var cwColors = ['#a78bfa','#22d3ee','#34d399','#f59e0b','#f472b6','#60a5fa'];
+        html += '<div class="card wide"><div class="card-header"><span>Cowork Model Usage</span><span class="label">Sessions by model</span></div>';
+        html += '<div class="model-bar">';
+        cwModelKeys.forEach(function(m, i) {
+          var pct = (cwModels[m] / cwModelTotal * 100).toFixed(1);
+          html += '<div class="model-segment" style="width:' + pct + '%;background:' + cwColors[i % cwColors.length] + '" title="' + esc(m) + ': ' + pct + '% (' + cwModels[m] + ' sessions)"></div>';
+        });
+        html += '</div><div class="model-legend">';
+        cwModelKeys.forEach(function(m, i) {
+          var pct = (cwModels[m] / cwModelTotal * 100).toFixed(0);
+          html += '<div class="model-legend-item"><div class="model-legend-dot" style="background:' + cwColors[i % cwColors.length] + '"></div>' + esc(m) + ' ' + pct + '% (' + cwModels[m] + ' sess)</div>';
+        });
+        html += '</div></div>';
       } else {
-        html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">Haiku is 5x cheaper for data-gathering. If you see mostly Opus, consider defaulting agents to Sonnet/Haiku.</p>';
+        html += '<div class="card wide"><div class="card-header"><span>Cowork Model Usage</span></div><div class="empty-state">Not enough Cowork data to show model distribution.</div></div>';
       }
-      html += '<div class="model-bar">';
-      modelOrder.forEach(function(m) {
-        var tokens = modelMix[m] || 0;
-        if (tokens > 0) {
-          var pct = (tokens / modelTotal * 100).toFixed(1);
-          var color = isCodex ? ['#22d3ee','#60a5fa','#34d399','#f59e0b','#a78bfa','#f472b6'][modelOrder.indexOf(m) % 6] : '';
-          var bg = isCodex ? ';background:' + color : '';
-          html += '<div class="model-segment ' + m.replace(/[^a-z0-9-]/g,'') + '" style="width:' + pct + '%' + bg + '" title="' + esc(m) + ': ' + pct + '% (' + fn(tokens) + ' tokens)"></div>';
-        }
-      });
-      var otherTokens = 0;
-      for (var om in modelMix) { if (modelOrder.indexOf(om) === -1) otherTokens += modelMix[om]; }
-      if (otherTokens > 0) {
-        html += '<div class="model-segment other" style="width:' + (otherTokens/modelTotal*100).toFixed(1) + '%"></div>';
-      }
-      html += '</div><div class="model-legend">';
-      modelOrder.forEach(function(m) {
-        var tokens = modelMix[m] || 0;
-        if (tokens > 0) {
-          var pct = (tokens / modelTotal * 100).toFixed(0);
-          var dotColor = isCodex ? ' style="background:' + ['#22d3ee','#60a5fa','#34d399','#f59e0b','#a78bfa','#f472b6'][modelOrder.indexOf(m) % 6] + '"' : '';
-          html += '<div class="model-legend-item"><div class="model-legend-dot ' + m.replace(/[^a-z0-9-]/g,'') + '"' + dotColor + '></div>' + esc(m) + ' ' + pct + '% (' + fn(tokens) + ' tok)</div>';
-        }
-      });
-      if (otherTokens > 0) {
-        html += '<div class="model-legend-item"><div class="model-legend-dot other"></div>other ' + (otherTokens/modelTotal*100).toFixed(0) + '% (' + fn(otherTokens) + ' tok)</div>';
-      }
-      html += '</div></div>';
     }
 
-    // Daily breakdown with date navigation
+    // Daily breakdown with date navigation — Code/All only
     var daily = t.daily || [];
-    if (daily.length > 0) {
+    if (activeSurface === 'cowork') {
+      var cwBI2 = (data.behavioral_insights || {})['cowork'] || {};
+      var cwSess = cwBI2.session_count || 0;
+      var cwAvgDur = cwBI2.avg_duration_min || 0;
+      html += '<div class="card wide"><div class="card-header"><span>Session Summary</span><span class="label">Cowork</span></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--s-3);padding:var(--s-3)">' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan)">' + cwSess + '</div><div style="font-size:13px;color:var(--c-text-dim)">Total Sessions</div></div>' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan)">' + cwAvgDur + 'm</div><div style="font-size:13px;color:var(--c-text-dim)">Avg Duration</div></div>' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan)">' + ((cwBI2.permission_interrupts || {}).avg_per_session || 0) + '</div><div style="font-size:13px;color:var(--c-text-dim)">Avg Permissions/Sess</div></div>' +
+        '</div></div>';
+    } else if (daily.length > 0) {
       // Date nav: show 7 days by default, with picker to jump to a date
       html += '<div class="card wide" id="daily-breakdown-card">' +
         '<div class="card-header"><span>Daily Breakdown</span></div>' +
@@ -3133,36 +3490,60 @@ var DB = (function() {
       html += '</div></div>';
     }
 
-    // Skills usage bar chart with clickable skill details
-    var skillsUsed = t.skills ? t.skills.used : {};
-    var skillEntries = [];
-    for (var sk in skillsUsed) { skillEntries.push([sk, skillsUsed[sk]]); }
-    skillEntries.sort(function(a, b) { return b[1] - a[1]; });
-    var topSkills = skillEntries.slice(0, 15);
+    // Skills / Tools section — surface-gated
+    if (activeSurface === 'cowork') {
+      // Top MCP Tools for Cowork
+      var cwBI3 = (data.behavioral_insights || {})['cowork'] || {};
+      var cwTools = cwBI3.top_tools || {};
+      var cwToolKeys = Object.keys(cwTools).sort(function(a,b) { return (cwTools[b] || 0) - (cwTools[a] || 0); });
+      var cwTopTools = cwToolKeys.slice(0, 15);
+      if (cwTopTools.length > 0) {
+        var cwMaxTool = cwTools[cwTopTools[0]];
+        html += '<div class="card wide"><div class="card-header"><span>Top MCP Tools</span><span class="label">' + cwToolKeys.length + ' tools used</span></div>' +
+          '<div class="chart-container">';
+        cwTopTools.forEach(function(name) {
+          var count = cwTools[name];
+          var w = Math.max(3, (count / cwMaxTool) * 100);
+          html += '<div class="bar-row">' +
+            '<span class="bar-label" style="width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(name) + '">' + esc(name) + '</span>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + w + '%;background:#a78bfa"></div></div>' +
+            '<span class="bar-value" style="width:60px;text-align:right;">' + count + ' calls</span></div>';
+        });
+        html += '</div></div>';
+      } else {
+        html += '<div class="card wide"><div class="card-header"><span>Top MCP Tools</span></div><div class="empty-state">Not enough Cowork data to show tool usage.</div></div>';
+      }
+    } else {
+      // Skills usage bar chart with clickable skill details
+      var skillsUsed = t.skills ? t.skills.used : {};
+      var skillEntries = [];
+      for (var sk in skillsUsed) { skillEntries.push([sk, skillsUsed[sk]]); }
+      skillEntries.sort(function(a, b) { return b[1] - a[1]; });
+      var topSkills = skillEntries.slice(0, 15);
 
-    if (isCodex) {
-      html += '<div class="card wide"><div class="card-header"><span>Codex Skill Usage</span><span class="label">not exposed yet</span></div>' +
-        '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:0;">Codex exposes installed skill inventory and config state, but not reliable per-session skill invocation counts in the local logs. Use Manage to disable obvious stale skills; usage bars will appear once Codex exposes invocation telemetry.</p></div>';
-    } else if (topSkills.length > 0) {
-      var maxSkill = topSkills[0][1];
-      html += '<div class="card wide"><div class="card-header"><span>Skills Used</span><span class="label">' +
-        Object.keys(skillsUsed).length + ' skills used of ' + (t.skills.installed_count || '?') + ' installed</span></div>' +
-        '<div class="chart-container">';
-      topSkills.forEach(function(entry) {
-        var w = Math.max(3, (entry[1] / maxSkill) * 100);
-        var sd = skillsDetail[entry[0]];
-        var tokNote = sd ? sd.frontmatter_tokens + ' tok' : '~100 tok';
-        html += '<div class="bar-row" data-skill-name="' + esc(entry[0]) + '" style="cursor:pointer;">' +
-          '<span class="bar-label" style="width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(entry[0]) + ' (' + tokNote + ')">' + esc(entry[0]) + '</span>' +
-          '<div class="bar-track"><div class="bar-fill" style="width:' + w + '%"></div></div>' +
-          '<span class="bar-value" style="width:60px;text-align:right;">' + entry[1] + ' sess</span></div>';
-      });
-      html += '</div></div>';
-    }
+      if (isCodex) {
+        html += '<div class="card wide"><div class="card-header"><span>Codex Skill Usage</span><span class="label">not exposed yet</span></div>' +
+          '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:0;">Codex exposes installed skill inventory and config state, but not reliable per-session skill invocation counts in the local logs. Use Manage to disable obvious stale skills; usage bars will appear once Codex exposes invocation telemetry.</p></div>';
+      } else if (topSkills.length > 0) {
+        var maxSkill = topSkills[0][1];
+        html += '<div class="card wide"><div class="card-header"><span>Skills Used</span><span class="label">' +
+          Object.keys(skillsUsed).length + ' skills used of ' + (t.skills.installed_count || '?') + ' installed</span></div>' +
+          '<div class="chart-container">';
+        topSkills.forEach(function(entry) {
+          var w = Math.max(3, (entry[1] / maxSkill) * 100);
+          var sd = skillsDetail[entry[0]];
+          var tokNote = sd ? sd.frontmatter_tokens + ' tok' : '~100 tok';
+          html += '<div class="bar-row" data-skill-name="' + esc(entry[0]) + '" style="cursor:pointer;">' +
+            '<span class="bar-label" style="width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(entry[0]) + ' (' + tokNote + ')">' + esc(entry[0]) + '</span>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + w + '%"></div></div>' +
+            '<span class="bar-value" style="width:60px;text-align:right;">' + entry[1] + ' sess</span></div>';
+        });
+        html += '</div></div>';
+      }
 
-    // Never-used skills with expandable detail (half-folded)
-    var neverUsed = t.skills ? t.skills.never_used : [];
-    if (!isCodex && neverUsed.length > 0) {
+      // Never-used skills with expandable detail (half-folded)
+      var neverUsed = t.skills ? t.skills.never_used : [];
+      if (!isCodex && neverUsed.length > 0) {
       var overhead = t.skills.never_used_overhead || (neverUsed.length * 100);
       var PREVIEW_COUNT = 4;
       html += '<div class="card wide"><div class="card-header"><span>Never Used (' + neverUsed.length + ' skills)</span><span class="label">~' + fn(overhead) + ' tokens wasted/session</span></div>' +
@@ -3213,7 +3594,8 @@ var DB = (function() {
         '</div></div>';
       html += '<div style="margin-top:var(--s-2);"><span class="skills-gap-tag" data-nav-section="quick" style="cursor:pointer;">Go to Quick Wins to archive these \u2192</span></div>';
       html += '</div>';
-    }
+      }
+    } // end skills/tools surface gate
 
     el.innerHTML = html;
 
@@ -4084,145 +4466,232 @@ var DB = (function() {
       '<p>Health score, pattern analysis, and coaching prompts for your setup.</p>' +
       '</div>';
 
-    if (!c) {
+    var activeSurface = window.__activeSurface || 'all';
+    var bi = data.behavioral_insights || {};
+
+    if (!c && activeSurface !== 'cowork') {
       html += '<div class="empty-state">No coaching data available. Run: python3 measure.py coach</div>';
       el.innerHTML = html;
       return;
     }
 
-    // Health Score hero
-    var score = c.health_score || 0;
-    var healthGrade = score >= 90 ? 'S' : score >= 80 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : score >= 40 ? 'D' : 'F';
-    var scoreColor = score >= 80 ? 'var(--c-accent-cyan)' : score >= 50 ? '#ff9f43' : '#ff6b6b';
-    html += '<div class="card wide">' +
-      '<div class="card-header"><span>Token Health Score</span></div>' +
-      '<div style="font-size:12px;color:var(--c-text-dim);padding:4px var(--s-3) 0;">How token-efficient your ' + esc(runtimeLabel) + ' setup appears. Factors include instruction-file size, skill/plugin inventory, MCP config, hooks, model routing, and recent usage. This is a setup health grade, not a model-quality grade.</div>' +
-      '<div style="text-align:center;padding:var(--s-4) 0;">' +
-      '<div style="font-size:72px;font-weight:700;font-family:var(--font-mono);color:' + scoreColor + ';text-shadow:0 0 20px ' + scoreColor + ';">' + healthGrade + '</div>' +
-      '<div style="font-size:28px;font-weight:500;font-family:var(--font-mono);color:' + scoreColor + ';">' + score + '/100</div>' +
-      '</div></div>';
+    if (activeSurface !== 'cowork') {
+      // Health Score hero — Code/All only (measures CLAUDE.md, skills, MCP config)
+      var score = c.health_score || 0;
+      var healthGrade = score >= 90 ? 'S' : score >= 80 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : score >= 40 ? 'D' : 'F';
+      var scoreColor = score >= 80 ? 'var(--c-accent-cyan)' : score >= 50 ? '#ff9f43' : '#ff6b6b';
+      html += '<div class="card wide">' +
+        '<div class="card-header"><span>Token Health Score</span></div>' +
+        '<div style="font-size:12px;color:var(--c-text-dim);padding:4px var(--s-3) 0;">How token-efficient your ' + esc(runtimeLabel) + ' setup appears. Factors include instruction-file size, skill/plugin inventory, MCP config, hooks, model routing, and recent usage. This is a setup health grade, not a model-quality grade.</div>' +
+        '<div style="text-align:center;padding:var(--s-4) 0;">' +
+        '<div style="font-size:72px;font-weight:700;font-family:var(--font-mono);color:' + scoreColor + ';text-shadow:0 0 20px ' + scoreColor + ';">' + healthGrade + '</div>' +
+        '<div style="font-size:28px;font-weight:500;font-family:var(--font-mono);color:' + scoreColor + ';">' + score + '/100</div>' +
+        '</div></div>';
 
-    // Snapshot summary
-    var snap = c.snapshot || {};
-    var instructionLabel = snap.instruction_label || (isCodex ? 'AGENTS.md' : 'CLAUDE.md');
-    html += '<div class="dashboard-grid">' +
-      '<div class="card"><div class="card-header"><span>Startup Overhead</span></div>' +
-      '<div style="font-size:11px;color:var(--c-text-dim);padding:0 0 4px 0;">Tokens loaded before you type. Includes ' + esc(instructionLabel) + ', skills/plugin metadata, MCP tools, and system prompt.</div>' +
-      '<div class="mini-stat">' + fn(snap.total_overhead || 0) + '</div>' +
-      '<div class="label">' + (snap.overhead_pct || 0) + '% of ' + ((snap.context_window || data.snapshot.context_window || 1000000) >= 1000000 ? ((snap.context_window || data.snapshot.context_window || 1000000) / 1000000) + 'M' : ((snap.context_window || data.snapshot.context_window || 1000000) / 1000) + 'K') + '</div></div>' +
-      '<div class="card"><div class="card-header"><span>Usable Context</span></div>' +
-      '<div style="font-size:11px;color:var(--c-text-dim);padding:0 0 4px 0;">Context window minus startup overhead and ~33K autocompact buffer. This is how much room you actually have for conversation.</div>' +
-      '<div class="mini-stat" style="color:var(--c-accent-cyan);">~' + fn(snap.usable_tokens || 0) + '</div>' +
-      '<div class="label">After overhead + autocompact buffer</div></div>' +
-      '</div>';
-
-    // Pattern cards
-    var bad = c.patterns_bad || [];
-    var good = c.patterns_good || [];
-
-    if (bad.length > 0) {
-      html += '<div class="card wide"><div class="card-header"><span>Issues Detected</span><span class="label">' + bad.length + ' found</span></div>';
-      bad.forEach(function(p) {
-        var sevColor = p.severity === 'high' ? '#ff6b6b' : p.severity === 'medium' ? '#ff9f43' : '#7d8ca3';
-        html += '<div style="border-left:3px solid ' + sevColor + ';padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(255,255,255,0.02);border-radius:0 6px 6px 0;">' +
-          '<div style="font-weight:500;color:' + sevColor + ';">' + esc(p.name) + '</div>' +
-          '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
-          '<div style="font-size:13px;margin-top:4px;"><span style="color:var(--c-accent-cyan);">Fix:</span> ' + esc(p.fix) + '</div>' +
-          '<div style="font-size:13px;color:var(--c-text-dim);">Savings: ' + esc(p.savings) + '</div>' +
-          '</div>';
-      });
-      html += '</div>';
-    }
-
-    if (good.length > 0) {
-      var earned = good.filter(function(p) { return p.earned; });
-      var neutral = good.filter(function(p) { return !p.earned; });
-
-      if (earned.length > 0) {
-        html += '<div class="card wide"><div class="card-header"><span>Working Well</span></div>';
-        earned.forEach(function(p) {
-          html += '<div style="border-left:3px solid var(--c-accent-cyan);padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(0,240,255,0.02);border-radius:0 6px 6px 0;">' +
-            '<div style="font-weight:500;color:var(--c-accent-cyan);">' + esc(p.name) + '</div>' +
-            '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
-            '</div>';
-        });
-        html += '</div>';
-      }
-
-      if (neutral.length > 0) {
-        html += '<div class="card wide"><div class="card-header"><span>Setup Summary</span></div>';
-        neutral.forEach(function(p) {
-          html += '<div style="border-left:3px solid var(--c-border);padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(255,255,255,0.015);border-radius:0 6px 6px 0;">' +
-            '<div style="font-weight:500;color:var(--c-text-main);">' + esc(p.name) + '</div>' +
-            '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
-            '</div>';
-        });
-        html += '</div>';
-      }
-    }
-
-    // Compaction timing guide
-    var cg = c.compaction_guide;
-    if (cg) {
-      html += '<div class="card wide"><div class="card-header"><span>When to Compact</span><span class="label">Timing Guide</span></div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);padding:var(--s-3);">' +
-        '<div>' +
-        '<div style="font-weight:500;color:var(--c-accent-cyan);margin-bottom:var(--s-2);">Compact after</div>';
-      (cg.compact_after || []).forEach(function(item) {
-        html += '<div style="font-size:14px;color:var(--c-text-dim);padding:4px 0;">\u2705 ' + esc(item) + '</div>';
-      });
-      html += '</div><div>' +
-        '<div style="font-weight:500;color:#ff6b6b;margin-bottom:var(--s-2);">Avoid during</div>';
-      (cg.avoid_during || []).forEach(function(item) {
-        html += '<div style="font-size:14px;color:var(--c-text-dim);padding:4px 0;">\u274C ' + esc(item) + '</div>';
-      });
-      html += '</div></div></div>';
-    }
-
-    // Subagent cost breakdown
-    var sc = c.subagent_costs;
-    if (sc && sc.total_usd > 0) {
-      html += '<div class="card wide"><div class="card-header"><span>Subagent Spend</span><span class="label">' + sc.pct_of_spend + '% of total</span></div>';
-      html += '<div style="text-align:center;padding:var(--s-3) 0;">' +
-        '<div style="font-size:36px;font-weight:700;font-family:var(--font-mono);color:' + (sc.pct_of_spend > 30 ? '#ff9f43' : 'var(--c-accent-cyan)') + ';">$' + sc.total_usd.toFixed(2) + '</div>' +
-        '<div style="font-size:13px;color:var(--c-text-dim);">spent on subagents (last 7 days)</div>' +
+      // Snapshot summary — Code/All only
+      var snap = c.snapshot || {};
+      var instructionLabel = snap.instruction_label || (isCodex ? 'AGENTS.md' : 'CLAUDE.md');
+      html += '<div class="dashboard-grid">' +
+        '<div class="card"><div class="card-header"><span>Startup Overhead</span></div>' +
+        '<div style="font-size:11px;color:var(--c-text-dim);padding:0 0 4px 0;">Tokens loaded before you type. Includes ' + esc(instructionLabel) + ', skills/plugin metadata, MCP tools, and system prompt.</div>' +
+        '<div class="mini-stat">' + fn(snap.total_overhead || 0) + '</div>' +
+        '<div class="label">' + (snap.overhead_pct || 0) + '% of ' + ((snap.context_window || data.snapshot.context_window || 1000000) >= 1000000 ? ((snap.context_window || data.snapshot.context_window || 1000000) / 1000000) + 'M' : ((snap.context_window || data.snapshot.context_window || 1000000) / 1000) + 'K') + '</div></div>' +
+        '<div class="card"><div class="card-header"><span>Usable Context</span></div>' +
+        '<div style="font-size:11px;color:var(--c-text-dim);padding:0 0 4px 0;">Context window minus startup overhead and ~33K autocompact buffer. This is how much room you actually have for conversation.</div>' +
+        '<div class="mini-stat" style="color:var(--c-accent-cyan);">~' + fn(snap.usable_tokens || 0) + '</div>' +
+        '<div class="label">After overhead + autocompact buffer</div></div>' +
         '</div>';
-      var topSubs = sc.top_subagents || [];
-      if (topSubs.length > 0) {
-        topSubs.slice(0, 5).forEach(function(s) {
-          var nameShort = s.name.length > 20 ? s.name.slice(0, 20) + '...' : s.name;
-          html += '<div style="display:flex;justify-content:space-between;padding:8px var(--s-3);border-bottom:1px solid var(--c-border);font-size:14px;">' +
-            '<div><span style="color:var(--c-text-main);">' + esc(nameShort) + '</span> <span style="color:var(--c-text-dim);">(' + s.model + ')</span></div>' +
-            '<div style="font-family:var(--font-mono);color:var(--c-accent-cyan);">$' + s.cost_usd.toFixed(2) + '</div></div>';
-        });
-      }
-      html += '</div>';
     }
 
-    // Costly prompts
-    var cp = c.costly_prompts;
-    if (cp && cp.length > 0) {
-      html += '<div class="card wide"><div class="card-header"><span>Most Expensive Prompts</span><span class="label">last 7 days</span></div>';
-      cp.slice(0, 5).forEach(function(p, i) {
-        var preview = (p.text || '').replace(/\n/g, ' ').slice(0, 80);
-        var breakdown = '';
-        if (p.cache_create && p.cache_create > 0) {
-          breakdown = fn(p.cache_create) + ' cache write';
-          if (p.cache_read && p.cache_read > 0) breakdown += ' + ' + fn(p.cache_read) + ' cache read';
-          if (p.fresh_input && p.fresh_input > 0) breakdown += ' + ' + fn(p.fresh_input) + ' fresh';
-        } else if (p.cache_read && p.cache_read > 0) {
-          breakdown = fn(p.cache_read) + ' cache read + ' + fn(p.fresh_input || 0) + ' fresh';
-        } else {
-          breakdown = fn(p.tokens_in || 0) + ' input';
+    if (activeSurface === 'cowork' && bi['cowork'] && Object.keys(bi['cowork']).length > 0) {
+      var cw = bi['cowork'];
+      var permScore = Math.max(0, 100 - Math.round((cw.permission_interrupts || {}).avg_per_session || 0) * 8);
+      var modelScore = 70;
+      var mu = cw.model_usage || {};
+      var muKeys = Object.keys(mu);
+      if (muKeys.length > 0 && cw.session_count > 0) {
+        var topModelPct = (mu[muKeys[0]] || 0) / cw.session_count;
+        modelScore = topModelPct > 0.9 ? 50 : topModelPct > 0.7 ? 70 : 85;
+      }
+
+      html += '<div class="card wide" style="margin-top:var(--s-3)">' +
+        '<div class="card-header"><span>Cowork Behavioral Scores</span><span class="label">Surface-specific</span></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);padding:var(--s-3)">' +
+        '<div style="text-align:center;padding:var(--s-2);border:1px solid var(--c-border);border-radius:8px">' +
+        '<div style="font-size:36px;font-weight:700;color:' + (permScore >= 70 ? 'var(--c-accent-cyan)' : '#ff9f43') + '">' + permScore + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim)">Permission Efficiency</div>' +
+        '<div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + ((cw.permission_interrupts || {}).avg_per_session || 0) + ' avg/session (lower=better)</div></div>' +
+        '<div style="text-align:center;padding:var(--s-2);border:1px solid var(--c-border);border-radius:8px">' +
+        '<div style="font-size:36px;font-weight:700;color:' + (modelScore >= 70 ? 'var(--c-accent-cyan)' : '#ff9f43') + '">' + modelScore + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim)">Model Efficiency</div>' +
+        '<div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Variety in model selection</div></div>' +
+        '</div></div>';
+    } else if ((activeSurface === 'claude-code' || activeSurface === 'all') && bi['claude-code'] && Object.keys(bi['claude-code']).length > 0) {
+      var cc = bi['claude-code'];
+      var routingScore = 100;
+      var mrw = cc.model_routing_waste || {};
+      if (mrw.msg_count > 100) routingScore = 40;
+      else if (mrw.msg_count > 50) routingScore = 60;
+      else if (mrw.msg_count > 20) routingScore = 75;
+
+      var hygieneScore = 100;
+      var ms = cc.marathon_sessions || [];
+      if (ms.length > 20) hygieneScore = 40;
+      else if (ms.length > 10) hygieneScore = 60;
+      else if (ms.length > 5) hygieneScore = 75;
+
+      html += '<div class="card wide" style="margin-top:var(--s-3)">' +
+        '<div class="card-header"><span>Behavioral Scores</span><span class="label">Usage patterns</span></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);padding:var(--s-3)">' +
+        '<div style="text-align:center;padding:var(--s-2);border:1px solid var(--c-border);border-radius:8px">' +
+        '<div style="font-size:36px;font-weight:700;color:' + (routingScore >= 70 ? 'var(--c-accent-cyan)' : '#ff9f43') + '">' + routingScore + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim)">Model Routing</div>' +
+        '<div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + (mrw.msg_count || 0) + ' short Opus msgs (lower=better)</div></div>' +
+        '<div style="text-align:center;padding:var(--s-2);border:1px solid var(--c-border);border-radius:8px">' +
+        '<div style="font-size:36px;font-weight:700;color:' + (hygieneScore >= 70 ? 'var(--c-accent-cyan)' : '#ff9f43') + '">' + hygieneScore + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim)">Session Hygiene</div>' +
+        '<div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + ms.length + ' marathon sessions (lower=better)</div></div>' +
+        '</div></div>';
+    }
+
+    // Surface-gated Coach sections
+    if (activeSurface !== 'cowork') {
+      // Pattern cards (Code/All only)
+      var bad = c.patterns_bad || [];
+      var good = c.patterns_good || [];
+
+      if (bad.length > 0) {
+        html += '<div class="card wide"><div class="card-header"><span>Issues Detected</span><span class="label">' + bad.length + ' found</span></div>';
+        bad.forEach(function(p) {
+          var sevColor = p.severity === 'high' ? '#ff6b6b' : p.severity === 'medium' ? '#ff9f43' : '#7d8ca3';
+          html += '<div style="border-left:3px solid ' + sevColor + ';padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(255,255,255,0.02);border-radius:0 6px 6px 0;">' +
+            '<div style="font-weight:500;color:' + sevColor + ';">' + esc(p.name) + '</div>' +
+            '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
+            '<div style="font-size:13px;margin-top:4px;"><span style="color:var(--c-accent-cyan);">Fix:</span> ' + esc(p.fix) + '</div>' +
+            '<div style="font-size:13px;color:var(--c-text-dim);">Savings: ' + esc(p.savings) + '</div>' +
+            '</div>';
+        });
+        html += '</div>';
+      }
+
+      if (good.length > 0) {
+        var earned = good.filter(function(p) { return p.earned; });
+        var neutral = good.filter(function(p) { return !p.earned; });
+
+        if (earned.length > 0) {
+          html += '<div class="card wide"><div class="card-header"><span>Working Well</span></div>';
+          earned.forEach(function(p) {
+            html += '<div style="border-left:3px solid var(--c-accent-cyan);padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(0,240,255,0.02);border-radius:0 6px 6px 0;">' +
+              '<div style="font-weight:500;color:var(--c-accent-cyan);">' + esc(p.name) + '</div>' +
+              '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
+              '</div>';
+          });
+          html += '</div>';
         }
-        breakdown += ' + ' + fn(p.tokens_out || 0) + ' output';
-        html += '<div style="padding:10px var(--s-3);border-bottom:1px solid var(--c-border);">' +
-          '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
-          '<span style="font-size:13px;color:var(--c-text-dim);">#' + (i + 1) + ' (' + breakdown + ')</span>' +
-          '<span style="font-family:var(--font-mono);font-weight:500;color:' + (p.cost_usd > 1 ? '#ff6b6b' : p.cost_usd > 0.5 ? '#ff9f43' : 'var(--c-text-main)') + ';">$' + p.cost_usd.toFixed(4) + '</span></div>' +
-          '<div style="font-size:14px;color:var(--c-text-dim);font-style:italic;">"' + esc(preview) + '..."</div></div>';
-      });
+
+        if (neutral.length > 0) {
+          html += '<div class="card wide"><div class="card-header"><span>Setup Summary</span></div>';
+          neutral.forEach(function(p) {
+            html += '<div style="border-left:3px solid var(--c-border);padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(255,255,255,0.015);border-radius:0 6px 6px 0;">' +
+              '<div style="font-weight:500;color:var(--c-text-main);">' + esc(p.name) + '</div>' +
+              '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
+              '</div>';
+          });
+          html += '</div>';
+        }
+      }
+
+      // Compaction timing guide
+      var cg = c.compaction_guide;
+      if (cg) {
+        html += '<div class="card wide"><div class="card-header"><span>When to Compact</span><span class="label">Timing Guide</span></div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);padding:var(--s-3);">' +
+          '<div>' +
+          '<div style="font-weight:500;color:var(--c-accent-cyan);margin-bottom:var(--s-2);">Compact after</div>';
+        (cg.compact_after || []).forEach(function(item) {
+          html += '<div style="font-size:14px;color:var(--c-text-dim);padding:4px 0;">\u2705 ' + esc(item) + '</div>';
+        });
+        html += '</div><div>' +
+          '<div style="font-weight:500;color:#ff6b6b;margin-bottom:var(--s-2);">Avoid during</div>';
+        (cg.avoid_during || []).forEach(function(item) {
+          html += '<div style="font-size:14px;color:var(--c-text-dim);padding:4px 0;">\u274C ' + esc(item) + '</div>';
+        });
+        html += '</div></div></div>';
+      }
+
+      // Subagent cost breakdown
+      var sc = c.subagent_costs;
+      if (sc && sc.total_usd > 0) {
+        html += '<div class="card wide"><div class="card-header"><span>Subagent Spend</span><span class="label">' + sc.pct_of_spend + '% of total</span></div>';
+        html += '<div style="text-align:center;padding:var(--s-3) 0;">' +
+          '<div style="font-size:36px;font-weight:700;font-family:var(--font-mono);color:' + (sc.pct_of_spend > 30 ? '#ff9f43' : 'var(--c-accent-cyan)') + ';">$' + sc.total_usd.toFixed(2) + '</div>' +
+          '<div style="font-size:13px;color:var(--c-text-dim);">spent on subagents (last 7 days)</div>' +
+          '</div>';
+        var topSubs = sc.top_subagents || [];
+        if (topSubs.length > 0) {
+          topSubs.slice(0, 5).forEach(function(s) {
+            var nameShort = s.name.length > 20 ? s.name.slice(0, 20) + '...' : s.name;
+            html += '<div style="display:flex;justify-content:space-between;padding:8px var(--s-3);border-bottom:1px solid var(--c-border);font-size:14px;">' +
+              '<div><span style="color:var(--c-text-main);">' + esc(nameShort) + '</span> <span style="color:var(--c-text-dim);">(' + s.model + ')</span></div>' +
+              '<div style="font-family:var(--font-mono);color:var(--c-accent-cyan);">$' + s.cost_usd.toFixed(2) + '</div></div>';
+          });
+        }
+        html += '</div>';
+      }
+
+      // Costly prompts
+      var cp = c.costly_prompts;
+      if (cp && cp.length > 0) {
+        html += '<div class="card wide"><div class="card-header"><span>Most Expensive Prompts</span><span class="label">last 7 days</span></div>';
+        cp.slice(0, 5).forEach(function(p, i) {
+          var preview = (p.text || '').replace(/\n/g, ' ').slice(0, 80);
+          var breakdown = '';
+          if (p.cache_create && p.cache_create > 0) {
+            breakdown = fn(p.cache_create) + ' cache write';
+            if (p.cache_read && p.cache_read > 0) breakdown += ' + ' + fn(p.cache_read) + ' cache read';
+            if (p.fresh_input && p.fresh_input > 0) breakdown += ' + ' + fn(p.fresh_input) + ' fresh';
+          } else if (p.cache_read && p.cache_read > 0) {
+            breakdown = fn(p.cache_read) + ' cache read + ' + fn(p.fresh_input || 0) + ' fresh';
+          } else {
+            breakdown = fn(p.tokens_in || 0) + ' input';
+          }
+          breakdown += ' + ' + fn(p.tokens_out || 0) + ' output';
+          html += '<div style="padding:10px var(--s-3);border-bottom:1px solid var(--c-border);">' +
+            '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
+            '<span style="font-size:13px;color:var(--c-text-dim);">#' + (i + 1) + ' (' + breakdown + ')</span>' +
+            '<span style="font-family:var(--font-mono);font-weight:500;color:' + (p.cost_usd > 1 ? '#ff6b6b' : p.cost_usd > 0.5 ? '#ff9f43' : 'var(--c-text-main)') + ';">$' + p.cost_usd.toFixed(4) + '</span></div>' +
+            '<div style="font-size:14px;color:var(--c-text-dim);font-style:italic;">"' + esc(preview) + '..."</div></div>';
+        });
+        html += '</div>';
+      }
+    } else {
+      // Cowork Health Summary
+      var cwCoach = (data.behavioral_insights || {})['cowork'] || {};
+      var cwSessCount = cwCoach.session_count || 0;
+      var cwAvgDurCoach = cwCoach.avg_duration_min || 0;
+      var cwPermAvg = (cwCoach.permission_interrupts || {}).avg_per_session || 0;
+      var cwRlTotal = (cwCoach.rate_limit_status || {}).total_events || 0;
+      var cwTopToolsCoach = cwCoach.top_tools || {};
+      var cwToolNames = Object.keys(cwTopToolsCoach).sort(function(a,b) { return cwTopToolsCoach[b] - cwTopToolsCoach[a]; }).slice(0, 3);
+
+      html += '<div class="card wide"><div class="card-header"><span>Cowork Health Summary</span><span class="label">Surface-specific</span></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:var(--s-3);padding:var(--s-3)">' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan)">' + cwSessCount + '</div><div style="font-size:12px;color:var(--c-text-dim)">Sessions</div></div>' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan)">' + cwAvgDurCoach + 'm</div><div style="font-size:12px;color:var(--c-text-dim)">Avg Duration</div></div>' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:' + (cwPermAvg > 5 ? '#ff9f43' : 'var(--c-accent-cyan)') + '">' + cwPermAvg + '</div><div style="font-size:12px;color:var(--c-text-dim)">Avg Perms/Sess</div></div>' +
+        '<div style="text-align:center"><div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:' + (cwRlTotal > 20 ? '#ff6b6b' : 'var(--c-accent-cyan)') + '">' + cwRlTotal + '</div><div style="font-size:12px;color:var(--c-text-dim)">Rate Limit Events</div></div>' +
+        '</div>';
+      if (cwToolNames.length > 0) {
+        html += '<div style="padding:0 var(--s-3) var(--s-3);font-size:13px;color:var(--c-text-dim)">Top tools: ' + cwToolNames.map(function(n) { return esc(n) + ' (' + cwTopToolsCoach[n] + ')'; }).join(', ') + '</div>';
+      }
       html += '</div>';
+
+      // Cowork Tips
+      html += '<div class="card wide"><div class="card-header"><span>Cowork Tips</span></div>' +
+        '<div style="padding:var(--s-3);font-size:14px;color:var(--c-text-dim);line-height:1.6">' +
+        'Cowork sessions don\'t load CLAUDE.md, skills, or hooks &mdash; their efficiency is driven by <strong style="color:var(--c-text-main)">model choice</strong>, <strong style="color:var(--c-text-main)">permission flow</strong>, and <strong style="color:var(--c-text-main)">tool selection</strong>. ' +
+        'Auto-approve trusted tools to reduce interrupts. Use Sonnet for routine tasks. Batch tool calls to avoid rate limits.' +
+        '</div></div>';
     }
 
     // Coaching questions
